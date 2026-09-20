@@ -1,0 +1,13 @@
+[project]
+name = "promise-agent"
+version = "0.1.0"
+description = "PROMISE agent: extraction, retrieval, planning, execution, approval, completion"
+requires-python = ">=3.10"
+dependencies = ["promise-domain", "promise-integrations", "promise-shared", "boto3>=1.40,<2"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["promise_agent*"]

@@ -1,0 +1,39 @@
+services:
+  promise-api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      STORAGE_BACKEND: local
+      LOCAL_DATA_DIR: /app/data
+      CORS_ORIGINS: http://localhost:3000
+    volumes:
+      - ./data:/app/data
+
+  promise-mcp:
+    build:
+      context: .
+      dockerfile: services/mcp/Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      STORAGE_BACKEND: local
+      LOCAL_DATA_DIR: /app/data
+      CORS_ORIGINS: http://localhost:3000
+    volumes:
+      - ./data:/app/data
+
+  promise-web:
+    build: ./web
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - promise-api

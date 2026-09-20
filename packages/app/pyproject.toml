@@ -1,0 +1,13 @@
+[project]
+name = "promise-app"
+version = "0.1.0"
+description = "PROMISE application layer: the services REST and MCP both call"
+requires-python = ">=3.10"
+dependencies = ["promise-domain", "promise-agent", "promise-integrations", "promise-shared"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["promise_app*"]

@@ -1,0 +1,18 @@
+[project]
+name = "promise-service-api"
+version = "0.1.0"
+description = "PROMISE REST API (FastAPI) — one channel over the shared application layer"
+requires-python = ">=3.10"
+dependencies = [
+    "promise-app",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.35,<1",
+    "python-dotenv>=1.0,<2",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["promise_api*"]

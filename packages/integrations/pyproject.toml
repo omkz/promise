@@ -1,0 +1,13 @@
+[project]
+name = "promise-integrations"
+version = "0.1.0"
+description = "PROMISE integration provider abstraction + local/demo provider"
+requires-python = ">=3.10"
+dependencies = ["promise-domain", "promise-shared"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["promise_integrations*"]

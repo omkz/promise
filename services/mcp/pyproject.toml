@@ -1,0 +1,20 @@
+[project]
+name = "promise-service-mcp"
+version = "0.1.0"
+description = "PROMISE MCP adapter (Streamable HTTP) — Alexa+ and other MCP clients as a channel"
+requires-python = ">=3.10"
+dependencies = [
+    "promise-app",
+    "mcp>=2.0,<3",
+    "starlette>=0.47,<1",
+    "uvicorn[standard]>=0.35,<1",
+    "python-dotenv>=1.0,<2",
+    "python-multipart>=0.0.20,<1",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["promise_mcp*"]

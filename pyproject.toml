@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools]
+# Root has no package of its own; this file only carries shared dev tooling
+# config (pytest) for the workspace under packages/ and services/.
+py-modules = []
