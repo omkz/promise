@@ -74,20 +74,28 @@ adapter, that REST and MCP observe the same workspace state, and (see below) the
 host (Alexa+, MCP Inspector) can render inline, with a "Handle this" button.
 
 - Tool: `create_commitment` (exposed by both `services/mcp` and, as REST, `POST /api/commitments`)
-- UI resource: `ui://promise/commitment-card` (`text/html;profile=mcp-app`), served from
-  `services/mcp/promise_mcp/ui/commitment_card.html`
+- UI resource: `ui://promise/commitment-card` (`text/html;profile=mcp-app`), served from the
+  built bundle at `services/mcp/ui/commitment-card/dist/index.html`
 - MCP endpoint: `http://127.0.0.1:8000/mcp` (Streamable HTTP; see `services/mcp/.env.example` for `HOST`/`PORT`)
 
-The view is a single self-contained HTML file (no build step, no Next.js) implementing the
-MCP Apps postMessage/JSON-RPC bridge by hand — see the `<script>` block in
-`commitment_card.html`. Its "Handle this" button calls back `tools/call` with
-`name: "handle_commitment"`, the same tool `services/mcp/promise_mcp/server.py` exposes
-elsewhere — the view never touches the domain or database directly.
-
-Inspect it locally:
+The view is a dedicated npm package, `services/mcp/ui/commitment-card`, using the official
+[`@modelcontextprotocol/ext-apps`](https://www.npmjs.com/package/@modelcontextprotocol/ext-apps)
+client/runtime (`App`) instead of a hand-written postMessage bridge — see `src/main.ts`. Vite
+bundles it to a single self-contained `dist/index.html` (no separate JS/CSS assets, since the
+view runs in a sandboxed MCP App iframe that shouldn't depend on extra network requests). Its
+"Handle this" button calls `app.callServerTool({ name: "handle_commitment", ... })`, the same
+tool `services/mcp/promise_mcp/server.py` exposes elsewhere — the view never touches the domain
+or database directly. Build it before running the server:
 
 ```bash
-(cd services/mcp && python -m promise_mcp.server)   # serves :8000, MCP endpoint at /mcp
+(cd services/mcp/ui/commitment-card && npm install && npm run build)   # writes dist/index.html
+(cd services/mcp && python -m promise_mcp.server)                       # serves :8000, MCP endpoint at /mcp
+```
+
+Inspect it locally with the [official MCP Inspector](https://github.com/modelcontextprotocol/inspector)
+(this is a local dev tool, not a substitute for testing against the real Alexa+ Add-on host):
+
+```bash
 npx @modelcontextprotocol/inspector --cli http://127.0.0.1:8000/mcp --method tools/list
 npx @modelcontextprotocol/inspector --cli http://127.0.0.1:8000/mcp --method resources/read --uri "ui://promise/commitment-card"
 npx @modelcontextprotocol/inspector --cli http://127.0.0.1:8000/mcp --method tools/call \
@@ -95,7 +103,10 @@ npx @modelcontextprotocol/inspector --cli http://127.0.0.1:8000/mcp --method too
 ```
 
 Or run `npx @modelcontextprotocol/inspector` (no `--cli`) for the interactive web UI, point it
-at the Streamable HTTP endpoint above, and open the Resources tab to preview the card.
+at the Streamable HTTP endpoint above, and open the Resources tab to preview the card. To point
+the official **Alexa+ Add-on Local Inspector** at this server, use the same Streamable HTTP
+endpoint: `http://127.0.0.1:8000/mcp` — see Amazon's Alexa+ MCP Add-on documentation for the
+inspector's own launch command, which is separate from this repo.
 
 ### Frontend
 

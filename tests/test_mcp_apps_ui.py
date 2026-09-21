@@ -50,8 +50,9 @@ async def test_resource_discovery_lists_the_ui_view(bound):
 
 
 async def test_resource_read_returns_the_commitment_card_html(bound):
-    """resources/read must return real HTML implementing the postMessage bridge
-    and the compact Commitment Card fields the spec asks for."""
+    """resources/read must return the real, built HTML for the Commitment Card
+    View — a self-contained bundle produced by the official
+    `@modelcontextprotocol/ext-apps` client/runtime, not free-form text."""
     contents = list(await mcp_server.mcp.read_resource(UI_RESOURCE_URI))
     assert len(contents) == 1
 
@@ -59,19 +60,28 @@ async def test_resource_read_returns_the_commitment_card_html(bound):
     assert contents[0].mime_type == "text/html;profile=mcp-app"
     assert isinstance(html, str) and html.strip().startswith("<!doctype html>")
 
-    # Compact Commitment Card requirements.
+    # Compact Commitment Card requirements (markup, not the bundled script).
     assert "PROMISE" in html
     assert "Commitment captured" in html
     for field_id in ('id="title"', 'id="contact"', 'id="due"', 'id="excerpt"'):
         assert field_id in html
     assert 'id="handle"' in html and "Handle this" in html
 
-    # The bridge protocol itself: JSON-RPC over postMessage, per ext-apps spec.
-    assert "ui/initialize" in html
-    assert "ui/notifications/initialized" in html
-    assert "ui/notifications/tool-result" in html
-    assert "tools/call" in html
-    assert 'name: "handle_commitment"' in html
+    # The view is the built bundle (services/mcp/ui/commitment-card/dist),
+    # inlined as a single <script type="module"> from the official
+    # @modelcontextprotocol/ext-apps client/runtime — never the hand-written,
+    # JSON-RPC-over-postMessage bridge this milestone replaced.
+    assert '<script type="module"' in html
+    assert "handle_commitment" in html  # the bundled callServerTool() call site
+
+
+def test_ui_dist_is_built_from_the_dedicated_mcp_app_package():
+    """The served HTML must be the build output of services/mcp/ui/commitment-card,
+    not a file hand-maintained inside the Python service."""
+    assert mcp_server._UI_DIST.exists(), (
+        "run `npm run build` in services/mcp/ui/commitment-card before serving"
+    )
+    assert mcp_server._UI_DIST.read_text(encoding="utf-8") == mcp_server._UI_HTML
 
 
 async def test_create_commitment_returns_structured_data_and_ui_metadata(bound):

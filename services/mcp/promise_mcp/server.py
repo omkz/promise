@@ -33,13 +33,22 @@ Milestone 2 adds an MCP Apps (SEP-1865, io.modelcontextprotocol/ui) view for
 whose "Handle this" button calls back into the *same* `handle_commitment`
 tool below — the view has no direct access to the domain/database, only to
 MCP tool calls that flow through `promise_app.tools` like everything else.
+The view itself is built from the standalone package at
+`services/mcp/ui/commitment-card` using the official
+`@modelcontextprotocol/ext-apps` client/runtime, not a hand-written
+postMessage bridge.
 """
 
 ctx = build_context()
 mcp = MCPServer("PROMISE")
 
 UI_RESOURCE_URI = "ui://promise/commitment-card"
-_UI_HTML = (Path(__file__).parent / "ui" / "commitment_card.html").read_text(encoding="utf-8")
+# Built by the dedicated MCP App package at services/mcp/ui/commitment-card
+# (`npm run build`): a single self-contained HTML file using the official
+# @modelcontextprotocol/ext-apps client/runtime, not a hand-written
+# postMessage bridge.
+_UI_DIST = Path(__file__).parent.parent / "ui" / "commitment-card" / "dist" / "index.html"
+_UI_HTML = _UI_DIST.read_text(encoding="utf-8")
 
 
 def _dump(value: Any) -> Any:
