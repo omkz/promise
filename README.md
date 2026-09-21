@@ -48,7 +48,7 @@ cp services/mcp/.env.example services/mcp/.env
 python -m promise_app.seed          # seeds the default dev workspace (Andi/Sarah demo data)
 
 (cd services/api && uvicorn promise_api.main:app --reload --port 8000)   # REST
-(cd services/mcp && python server.py)                                    # MCP, in another shell
+(cd services/mcp && python -m promise_mcp.server)                        # MCP, in another shell
 ```
 
 Both services default `LOCAL_DATA_DIR` to `../../data` (a shared file at the repo root), so
@@ -65,7 +65,37 @@ pytest
 Covers: commitment extraction + source provenance, workspace isolation, the full
 commitment/action/approval lifecycle, approval enforcement, duplicate-action protection,
 swapping the integration provider, the agent-run/step/audit trail, the REST adapter, the MCP
-adapter, and that REST and MCP observe the same workspace state.
+adapter, that REST and MCP observe the same workspace state, and (see below) the MCP Apps UI.
+
+### MCP App: Commitment Card (Alexa+ / MCP Apps UI)
+
+`create_commitment` returns an [MCP Apps](https://github.com/modelcontextprotocol/ext-apps)
+(SEP-1865, `io.modelcontextprotocol/ui`) view — a compact Commitment Card an MCP Apps-capable
+host (Alexa+, MCP Inspector) can render inline, with a "Handle this" button.
+
+- Tool: `create_commitment` (exposed by both `services/mcp` and, as REST, `POST /api/commitments`)
+- UI resource: `ui://promise/commitment-card` (`text/html;profile=mcp-app`), served from
+  `services/mcp/promise_mcp/ui/commitment_card.html`
+- MCP endpoint: `http://127.0.0.1:8000/mcp` (Streamable HTTP; see `services/mcp/.env.example` for `HOST`/`PORT`)
+
+The view is a single self-contained HTML file (no build step, no Next.js) implementing the
+MCP Apps postMessage/JSON-RPC bridge by hand — see the `<script>` block in
+`commitment_card.html`. Its "Handle this" button calls back `tools/call` with
+`name: "handle_commitment"`, the same tool `services/mcp/promise_mcp/server.py` exposes
+elsewhere — the view never touches the domain or database directly.
+
+Inspect it locally:
+
+```bash
+(cd services/mcp && python -m promise_mcp.server)   # serves :8000, MCP endpoint at /mcp
+npx @modelcontextprotocol/inspector --cli http://127.0.0.1:8000/mcp --method tools/list
+npx @modelcontextprotocol/inspector --cli http://127.0.0.1:8000/mcp --method resources/read --uri "ui://promise/commitment-card"
+npx @modelcontextprotocol/inspector --cli http://127.0.0.1:8000/mcp --method tools/call \
+    --tool-name create_commitment --tool-arg text="I'll send Andi the revised proposal tomorrow morning."
+```
+
+Or run `npx @modelcontextprotocol/inspector` (no `--cli`) for the interactive web UI, point it
+at the Streamable HTTP endpoint above, and open the Resources tab to preview the card.
 
 ### Frontend
 

@@ -12,8 +12,10 @@ def test_mcp_tools_are_thin_wrappers_over_the_shared_application_layer(seeded_ct
     monkeypatch.setattr(mcp_server, "ctx", seeded_ctx)
 
     created = mcp_server.create_commitment(text="I'll send Andi the revised proposal tomorrow morning.")
-    assert created["commitment"]["status"] == "open"
-    commitment_id = created["commitment"]["id"]
+    # create_commitment returns a CallToolResult directly (Milestone 2: carries _meta.ui.resourceUri).
+    assert created.meta == {"ui": {"resourceUri": mcp_server.UI_RESOURCE_URI}}
+    assert created.structured_content["commitment"]["status"] == "open"
+    commitment_id = created.structured_content["commitment"]["id"]
 
     handled = mcp_server.handle_commitment(commitment_id)
     assert handled["action"]["status"] == "waiting_for_approval"
@@ -54,6 +56,6 @@ def test_web_and_mcp_channels_see_the_same_workspace_state(seeded_ctx, monkeypat
 
         mcp_created = mcp_server.create_commitment(text="I'll email Priya tomorrow.")
         via_rest = client.get("/api/commitments").json()
-        assert any(c["id"] == mcp_created["commitment"]["id"] for c in via_rest)
+        assert any(c["id"] == mcp_created.structured_content["commitment"]["id"] for c in via_rest)
     finally:
         app.dependency_overrides.clear()

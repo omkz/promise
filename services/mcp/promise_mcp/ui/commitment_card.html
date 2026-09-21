@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PROMISE — Commitment Card</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: transparent;
+    color: #101114;
+  }
+  .card {
+    border: 1px solid #e5e7ee;
+    border-radius: 18px;
+    padding: 16px 18px;
+    max-width: 420px;
+    background: #ffffff;
+  }
+  .brand { font-weight: 900; letter-spacing: .14em; font-size: 12px; color: #101114; }
+  .headline { font-weight: 800; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: #6f7480; margin: 10px 0 4px; }
+  .title { font-size: 18px; font-weight: 800; margin: 0 0 10px; line-height: 1.3; }
+  .rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+  .row { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+  .row .k { color: #6f7480; }
+  .row .v { font-weight: 700; text-align: right; }
+  .quote {
+    background: #f6f7fb; border-radius: 12px; padding: 10px 12px; font-size: 12.5px;
+    color: #33363f; line-height: 1.45; margin: 6px 0 14px; font-style: italic;
+  }
+  button {
+    width: 100%; border: 0; background: #111318; color: #fff; font-weight: 800;
+    padding: 11px 14px; border-radius: 12px; font-size: 13px; cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: default; }
+  .status { margin-top: 10px; font-size: 12px; color: #6f7480; min-height: 14px; }
+  .status.ok { color: #1e8a5a; }
+  .status.err { color: #c53b3b; }
+  @media (prefers-color-scheme: dark) {
+    .card { background: #17181c; border-color: #2a2c33; }
+    .brand, .title { color: #f2f3f6; }
+    .quote { background: #202127; color: #cdd0d8; }
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">PROMISE</div>
+    <div class="headline">Commitment captured</div>
+    <p class="title" id="title">—</p>
+    <div class="rows">
+      <div class="row"><span class="k">Contact</span><span class="v" id="contact">—</span></div>
+      <div class="row"><span class="k">Due</span><span class="v" id="due">—</span></div>
+    </div>
+    <div class="quote" id="excerpt">—</div>
+    <button id="handle" disabled>Handle this</button>
+    <div class="status" id="status"></div>
+  </div>
+
+  <script>
+    // Minimal MCP Apps bridge: JSON-RPC 2.0 over postMessage, no SDK dependency.
+    // Protocol: https://github.com/modelcontextprotocol/ext-apps (2026-01-26)
+    let nextId = 1;
+    const pending = new Map();
+
+    function sendRequest(method, params) {
+      const id = nextId++;
+      window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+      return new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); });
+    }
+
+    function sendNotification(method, params) {
+      window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*");
+    }
+
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+      if (!data || data.jsonrpc !== "2.0") return;
+
+      if (data.id !== undefined && pending.has(data.id)) {
+        const { resolve, reject } = pending.get(data.id);
+        pending.delete(data.id);
+        if ("result" in data) resolve(data.result);
+        else if ("error" in data) reject(new Error(data.error?.message ?? "MCP host error"));
+        return;
+      }
+
+      if (data.method === "ui/notifications/tool-result") {
+        applyToolResult(data.params);
+      }
+    });
+
+    let state = { commitmentId: null };
+
+    function fmtDue(iso) {
+      if (!iso) return "No deadline";
+      try { return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
+      catch { return iso; }
+    }
+
+    function applyToolResult(result) {
+      const structured = result?.structuredContent ?? result;
+      const commitment = structured?.commitment;
+      const contact = structured?.contact;
+      const source = structured?.source;
+      if (!commitment) return;
+
+      state.commitmentId = commitment.id;
+      document.getElementById("title").textContent = commitment.title ?? commitment.action ?? "Untitled commitment";
+      document.getElementById("contact").textContent = contact?.name ?? "—";
+      document.getElementById("due").textContent = fmtDue(commitment.due_at);
+      document.getElementById("excerpt").textContent = "“" + (source?.excerpt ?? commitment.description ?? "") + "”";
+
+      const btn = document.getElementById("handle");
+      btn.disabled = false;
+    }
+
+    async function handleClick() {
+      if (!state.commitmentId) return;
+      const btn = document.getElementById("handle");
+      const status = document.getElementById("status");
+      btn.disabled = true;
+      status.className = "status";
+      status.textContent = "Asking the agent to handle it…";
+      try {
+        const result = await sendRequest("tools/call", {
+          name: "handle_commitment",
+          arguments: { commitment_id: state.commitmentId },
+        });
+        const structured = result?.structuredContent ?? {};
+        const action = structured?.action;
+        status.className = "status ok";
+        status.textContent = action
+          ? `Action proposed (${action.status}) — waiting for your approval.`
+          : "Agent run started.";
+      } catch (err) {
+        status.className = "status err";
+        status.textContent = "Could not handle this commitment: " + err.message;
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById("handle").addEventListener("click", handleClick);
+
+    (async function init() {
+      try {
+        await sendRequest("ui/initialize", {
+          protocolVersion: "2026-01-26",
+          clientInfo: { name: "promise-commitment-card", version: "0.1.0" },
+          capabilities: {},
+          appCapabilities: { availableDisplayModes: ["inline"] },
+        });
+        sendNotification("ui/notifications/initialized", {});
+      } catch (err) {
+        document.getElementById("status").textContent = "Failed to initialize: " + err.message;
+      }
+    })();
+  </script>
+</body>
+</html>
