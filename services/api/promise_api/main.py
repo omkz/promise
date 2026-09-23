@@ -12,12 +12,17 @@ from fastapi.responses import JSONResponse
 from promise_app.bootstrap import AppContext
 from promise_shared.errors import (
     ApprovalRequiredError,
+    AuthenticationRequired,
     ConflictError,
     DuplicateActionError,
     ExtractionProviderError,
+    InsufficientScope,
+    InvalidToken,
     LLMProviderError,
     NotFoundError,
     PromiseError,
+    TokenExpired,
+    WorkspaceAccessDenied,
     WorkspaceAccessError,
 )
 
@@ -37,6 +42,39 @@ def _not_found(_: Request, exc: NotFoundError) -> JSONResponse:
 
 @app.exception_handler(WorkspaceAccessError)
 def _forbidden(_: Request, exc: WorkspaceAccessError) -> JSONResponse:
+    return JSONResponse({"error": str(exc)}, status_code=403)
+
+
+# ---- identity & authorization (see promise_auth / promise_app.identity) --------------------
+#
+# 401: the caller isn't authenticated at all, or their token is unusable. 403: the caller IS
+# authenticated but isn't authorized for this workspace/action. Neither handler below ever
+# echoes the Authorization header or the token itself — `str(exc)` only ever carries a short,
+# pre-written reason (see promise_shared.errors), never raw credentials.
+
+
+@app.exception_handler(AuthenticationRequired)
+def _authentication_required(_: Request, exc: AuthenticationRequired) -> JSONResponse:
+    return JSONResponse({"error": str(exc)}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
+
+
+@app.exception_handler(InvalidToken)
+def _invalid_token(_: Request, exc: InvalidToken) -> JSONResponse:
+    return JSONResponse({"error": str(exc)}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
+
+
+@app.exception_handler(TokenExpired)
+def _token_expired(_: Request, exc: TokenExpired) -> JSONResponse:
+    return JSONResponse({"error": str(exc)}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
+
+
+@app.exception_handler(InsufficientScope)
+def _insufficient_scope(_: Request, exc: InsufficientScope) -> JSONResponse:
+    return JSONResponse({"error": str(exc)}, status_code=403)
+
+
+@app.exception_handler(WorkspaceAccessDenied)
+def _workspace_access_denied(_: Request, exc: WorkspaceAccessDenied) -> JSONResponse:
     return JSONResponse({"error": str(exc)}, status_code=403)
 
 

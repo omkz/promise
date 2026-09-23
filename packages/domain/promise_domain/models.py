@@ -15,6 +15,8 @@ from .enums import (
     CommitmentStatus,
     DraftStatus,
     IntegrationStatus,
+    MembershipRole,
+    MembershipStatus,
     Priority,
 )
 
@@ -31,8 +33,16 @@ class Workspace(BaseModel):
 class User(BaseModel):
     id: str
     workspace_id: str
+    """This user's home/first-created workspace. Which workspace(s) they can actually
+    act in for a given request is decided by `WorkspaceMembership`, not this field —
+    see `promise_auth` and `WorkspaceMembership` below."""
     email: str
     name: str
+    external_subject: str | None = None
+    """The `sub` claim from a verified OIDC/Cognito token, once this user has signed
+    in for real. Null for a user that only exists via local/seed data. Identity
+    resolution looks a user up by this field — see `promise_app`'s principal
+    resolution — never by trusting a caller-supplied user_id."""
     created_at: str = Field(default_factory=iso_now)
     updated_at: str = Field(default_factory=iso_now)
 
@@ -176,6 +186,24 @@ class IntegrationAccount(BaseModel):
     scopes: list[str] = Field(default_factory=list)
     secret_ref: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=iso_now)
+    updated_at: str = Field(default_factory=iso_now)
+
+
+class WorkspaceMembership(BaseModel):
+    """A user's membership in a workspace — the thing `promise_auth`'s identity
+    resolution actually checks (never a caller-supplied workspace_id alone).
+
+    Deliberately minimal, not a full RBAC matrix: two roles (owner/member), two
+    statuses (active/inactive). See `promise_auth.authorization` for what each
+    role can do.
+    """
+
+    id: str
+    workspace_id: str
+    user_id: str
+    role: MembershipRole = MembershipRole.MEMBER
+    status: MembershipStatus = MembershipStatus.ACTIVE
     created_at: str = Field(default_factory=iso_now)
     updated_at: str = Field(default_factory=iso_now)
 

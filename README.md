@@ -19,6 +19,7 @@ packages/domain      Entities + statuses + workspace-scoped repositories
 packages/agent        Extraction, retrieval, planning, execution, approval, completion
 packages/integrations  IntegrationProvider abstraction + local/demo provider
 packages/app           Application services BOTH services/api and services/mcp call
+packages/auth           AuthProvider abstraction, JWT/JWKS validation, principal resolution
 packages/shared        ids, clock, errors, storage adapters (local JSON + DynamoDB)
 ```
 
@@ -325,6 +326,84 @@ LLMProviderError` (with a classified `retryable` flag) instead of silently subst
 mock — the agent run fails clearly, surfaced over REST as `503` with `{"provider",
 "retryable"}`. Local tests stay fully deterministic (`BEDROCK_ENABLED` unset/false).
 
+## Identity & Authorization
+
+```
+HTTP/MCP request -> Authentication (AuthProvider) -> AuthenticatedPrincipal -> Authorization (require) -> Application Service -> Domain/Repository
+```
+
+The application layer never trusts a `user_id` from a query parameter, JSON body, MCP tool
+argument, or `X-User-Id`-style header — identity always comes from
+`packages/app/promise_app/identity.py::authenticate`, called once per request by both
+`services/api/promise_api/deps.py::get_principal` and `services/mcp/promise_mcp/server.py`'s
+`_authenticate`. Neither adapter re-implements it; both call the exact same function.
+
+- **`packages/auth/` (`promise_auth`)**: the `AuthProvider` abstraction. `AuthRequest` (raw,
+  transport-agnostic input: an `Authorization` header, an optional workspace hint, and a
+  local-only dev-user override) -> `TokenClaims` (verified subject + scopes — no workspace
+  yet). Two implementations:
+  - `LocalAuthProvider` (`AUTH_MODE=local`, the default): deterministic dev identity from
+    `DEV_USER_ID`/`DEV_WORKSPACE_ID`. Not production security — isolated behind the same
+    interface `OIDCAuthProvider` implements, so nothing above this layer needs to know which
+    is active.
+  - `OIDCAuthProvider` (`AUTH_MODE=oidc`): validates a `Bearer` access token against JWKS —
+    signature, issuer, expiration, audience (when configured), `token_use`, and required
+    scopes. Compatible with Amazon Cognito User Pools and any standard OIDC provider. Never
+    decodes a JWT without verifying its signature first, and never falls back to local
+    identity on any failure — every failure raises a specific, classified error (see below).
+- **Principal resolution** (`packages/app/promise_app/identity.py`): `TokenClaims` alone
+  aren't enough to act — `AuthenticatedPrincipal.user_id`/`workspace_id` are resolved, never
+  taken from the JWT directly:
+  `JWT subject -> User.external_subject -> User -> WorkspaceMembership -> authorized workspace`.
+  An unrecognized subject is `AuthenticationRequired`; a real user with no active membership
+  in the requested workspace is `WorkspaceAccessDenied` — and that check never reveals
+  whether the requested workspace even exists.
+- **`WorkspaceMembership`** (`packages/domain`): minimal, not a full RBAC matrix — `role`
+  (`owner`/`member`) x `status` (`active`/`inactive`). `promise_auth.authorization` maps role
+  -> a small permission set (`commitments.read`/`.write`, `context.read`, `agent.execute`,
+  `actions.approve`, `integrations.manage`); `require(principal, permission)` is what every
+  route/tool calls before doing anything.
+- **Errors** (`promise_shared.errors`): `AuthenticationRequired`/`InvalidToken`/`TokenExpired`
+  -> REST `401` (with `WWW-Authenticate: Bearer`); `InsufficientScope`/`WorkspaceAccessDenied`
+  -> REST `403`. A resource in a foreign workspace still `404`s via the existing
+  `NotFoundError` path (workspace-scoped repository lookups), never `403` — so a request can't
+  distinguish "wrong workspace" from "doesn't exist" by resource id alone.
+- **MCP**: tools no longer accept `workspace_id`/`user_id`/`actor`/`decided_by` as arguments
+  at all (see `services/mcp/promise_mcp/server.py`) — identity comes from
+  `Context.headers["authorization"]`, the same Bearer-token surface Alexa+'s MCP
+  account-linking (OAuth authorization code + PKCE) hands this adapter once linked. Switching
+  `AUTH_MODE` to `oidc` and pointing `COGNITO_*` at the right user pool is the extension
+  point; implementing Alexa+'s actual account-linking deployment configuration is out of
+  scope for this milestone.
+- **Web** (`web/lib/auth.ts`): every API call goes through `authHeaders()`.
+  `NEXT_PUBLIC_AUTH_MODE=local` (default) sends `X-Dev-User-Id`/`X-Workspace-Id`, mirroring
+  the API's local mode. `NEXT_PUBLIC_AUTH_MODE=oidc` sends a real `Authorization: Bearer`
+  header once a session exists; `getAccessToken()` is the extension point a Cognito Hosted UI
+  sign-in flow fills in — no sign-in UI is implemented yet.
+
+```env
+AUTH_MODE=local                      # or oidc
+DEV_USER_ID=usr_dev_default          # AUTH_MODE=local only
+DEV_WORKSPACE_ID=ws_dev_default      # AUTH_MODE=local only
+
+COGNITO_ISSUER=https://cognito-idp.<region>.amazonaws.com/<user-pool-id>   # AUTH_MODE=oidc
+COGNITO_AUDIENCE=<app-client-id>                                          # optional
+COGNITO_JWKS_URL=                                                         # optional; OIDC discovery preferred
+COGNITO_REQUIRED_SCOPES=                                                  # optional, comma-separated
+```
+
+**Try it**: `uv run pytest tests/test_auth_oidc.py tests/test_identity_resolution.py
+tests/test_rest_auth.py tests/test_mcp_auth.py` — generated RSA keypair + self-signed JWT
+fixtures, no live Cognito or network access required.
+
+**Known limitations**: subject -> `User` resolution is a linear scan over `query_all("user")`
+(see `identity.py`'s own docstring) — fine for local/demo data, but a real deployment needs a
+proper index (e.g. a DynamoDB GSI on `external_subject`). No Cognito Hosted UI sign-in flow is
+implemented on the web client yet — only the header/token plumbing. Alexa+'s actual
+account-linking deployment configuration (redirect URIs, Cognito app client setup, etc.) is
+not implemented — `_authenticate` in `services/mcp/promise_mcp/server.py` is the documented
+extension point for it.
+
 ## AWS mode
 
 ```env
@@ -347,10 +426,12 @@ a mock result: both raise a classified, retryable `PromiseError` (`LLMProviderEr
 
 ## Known limitations / next steps
 
-- Auth is not implemented: workspace/user resolution is header-based
-  (`X-Workspace-Id`/`X-User-Id`) with a seeded default workspace as fallback. A real deployment
-  needs Cognito/JWT-based auth wired into `services/api/promise_api/deps.py` and
-  `services/mcp` before handling real user data.
+- Identity & Authorization is v1 (see the section above): `AUTH_MODE=oidc` validates real
+  Cognito/OIDC bearer tokens, but subject -> `User` resolution is a linear `query_all` scan
+  (needs a real index at scale), there's no Cognito Hosted UI sign-in flow on the web client
+  yet (only the header/token plumbing), and Alexa+'s actual account-linking deployment
+  configuration isn't implemented — `_authenticate` in `services/mcp/promise_mcp/server.py`
+  is the documented extension point for it.
 - Only one integration provider exists (`LocalIntegrationProvider`, demo/local data). Gmail,
   Drive, Slack, etc. are additive: implement `IntegrationProvider` and register it — no
   changes needed in `packages/agent` or `packages/app`.

@@ -13,6 +13,7 @@ members = [
     "promise",
     "promise-agent",
     "promise-app",
+    "promise-auth",
     "promise-domain",
     "promise-integrations",
     "promise-service-api",
@@ -288,7 +289,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -338,8 +339,8 @@ name = "httpcore2"
 version = "2.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
-    { name = "truststore", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "h11" },
+    { name = "truststore" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/15/8c/e925b1c92018abb3a1863ce1549d76d2381e334d21d65d4ac8f65dabd78a/httpcore2-2.13.0.tar.gz", hash = "sha256:2adc8be4fb285fbcd6d894298db3b52c177e74b6674eda3a76bd36be3292a3db", size = 67740, upload-time = "2026-09-14T14:18:04.717Z" }
 wheels = [
@@ -616,6 +617,7 @@ version = "0.1.0"
 source = { editable = "packages/app" }
 dependencies = [
     { name = "promise-agent" },
+    { name = "promise-auth" },
     { name = "promise-domain" },
     { name = "promise-integrations" },
     { name = "promise-shared" },
@@ -624,9 +626,25 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "promise-agent", editable = "packages/agent" },
+    { name = "promise-auth", editable = "packages/auth" },
     { name = "promise-domain", editable = "packages/domain" },
     { name = "promise-integrations", editable = "packages/integrations" },
     { name = "promise-shared", editable = "packages/shared" },
+]
+
+[[package]]
+name = "promise-auth"
+version = "0.1.0"
+source = { editable = "packages/auth" }
+dependencies = [
+    { name = "promise-shared" },
+    { name = "pyjwt", extra = ["crypto"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "promise-shared", editable = "packages/shared" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
 ]
 
 [[package]]
@@ -666,6 +684,7 @@ source = { editable = "services/api" }
 dependencies = [
     { name = "fastapi" },
     { name = "promise-app" },
+    { name = "promise-auth" },
     { name = "python-dotenv" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -674,6 +693,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "promise-app", editable = "packages/app" },
+    { name = "promise-auth", editable = "packages/auth" },
     { name = "python-dotenv", specifier = ">=1.0,<2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1" },
 ]
@@ -685,6 +705,7 @@ source = { editable = "services/mcp" }
 dependencies = [
     { name = "mcp" },
     { name = "promise-app" },
+    { name = "promise-auth" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "starlette" },
@@ -695,6 +716,7 @@ dependencies = [
 requires-dist = [
     { name = "mcp", specifier = ">=2.0,<3" },
     { name = "promise-app", editable = "packages/app" },
+    { name = "promise-auth", editable = "packages/auth" },
     { name = "python-dotenv", specifier = ">=1.0,<2" },
     { name = "python-multipart", specifier = ">=0.0.20,<1" },
     { name = "starlette", specifier = ">=0.47,<1" },

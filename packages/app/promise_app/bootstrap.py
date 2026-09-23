@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from promise_agent.context import AgentRepos
 from promise_agent.orchestrator import AgentOrchestrator
-from promise_domain.models import User, Workspace
+from promise_auth import AuthProvider, LocalAuthProvider, OIDCAuthProvider
+from promise_domain.enums import MembershipRole, MembershipStatus
+from promise_domain.models import User, Workspace, WorkspaceMembership
 from promise_integrations.local_provider import LocalIntegrationProvider
 from promise_integrations.registry import IntegrationRegistry
+from promise_shared.ids import new_id
 from promise_shared.store import EntityStore, build_store
 
 from .repos import RepoSet, build_agent_repos, build_repo_set
@@ -24,20 +28,63 @@ class AppContext:
     agent_repos: AgentRepos
     integrations: IntegrationRegistry
     orchestrator: AgentOrchestrator
+    auth_provider: AuthProvider
     default_workspace_id: str
     default_user_id: str
 
 
 def ensure_default_workspace(repos: RepoSet) -> None:
-    """Local development may use a default dev workspace/user; nothing else in the
-    codebase is allowed to assume a single global workspace exists."""
+    """Local development may use a default dev workspace/user/membership;
+    nothing else in the codebase is allowed to assume a single global
+    workspace exists."""
     if repos.workspaces.get(DEFAULT_WORKSPACE_ID) is None:
         repos.workspaces.save(Workspace(id=DEFAULT_WORKSPACE_ID, name="Dev Workspace", slug=DEFAULT_WORKSPACE_SLUG, is_default=True))
     if repos.users.get(DEFAULT_WORKSPACE_ID, DEFAULT_USER_ID) is None:
-        repos.users.save(User(id=DEFAULT_USER_ID, workspace_id=DEFAULT_WORKSPACE_ID, email=DEFAULT_USER_EMAIL, name="Dev User"))
+        repos.users.save(
+            User(
+                id=DEFAULT_USER_ID, workspace_id=DEFAULT_WORKSPACE_ID, email=DEFAULT_USER_EMAIL, name="Dev User",
+                external_subject=f"local:{DEFAULT_USER_ID}",
+            )
+        )
+    existing_membership = next(
+        (m for m in repos.memberships.list(DEFAULT_WORKSPACE_ID) if m.user_id == DEFAULT_USER_ID), None
+    )
+    if existing_membership is None:
+        repos.memberships.save(
+            WorkspaceMembership(
+                id=new_id("mem"), workspace_id=DEFAULT_WORKSPACE_ID, user_id=DEFAULT_USER_ID,
+                role=MembershipRole.OWNER, status=MembershipStatus.ACTIVE,
+            )
+        )
 
 
-def build_context(store: EntityStore | None = None) -> AppContext:
+def build_auth_provider() -> AuthProvider:
+    """`AUTH_MODE=local` (the default, for `uv run pytest` / local `uvicorn` with
+    no Cognito user pool) -> `LocalAuthProvider`. `AUTH_MODE=oidc` ->
+    `OIDCAuthProvider`, requiring `COGNITO_ISSUER` at minimum. No mode ever
+    silently falls back to another — see SECURITY in the Identity &
+    Authorization Foundation spec."""
+    mode = os.getenv("AUTH_MODE", "local").lower()
+    if mode == "oidc":
+        issuer = os.getenv("COGNITO_ISSUER")
+        if not issuer:
+            raise RuntimeError("AUTH_MODE=oidc requires COGNITO_ISSUER to be set")
+        required_scopes = frozenset(s.strip() for s in os.getenv("COGNITO_REQUIRED_SCOPES", "").split(",") if s.strip())
+        return OIDCAuthProvider.from_config(
+            issuer=issuer,
+            audience=os.getenv("COGNITO_AUDIENCE") or os.getenv("COGNITO_CLIENT_ID") or None,
+            jwks_url=os.getenv("COGNITO_JWKS_URL") or None,
+            required_scopes=required_scopes,
+        )
+    if mode != "local":
+        raise RuntimeError(f"unknown AUTH_MODE {mode!r} (expected 'local' or 'oidc')")
+    return LocalAuthProvider(
+        default_user_id=os.getenv("DEV_USER_ID", DEFAULT_USER_ID),
+        default_workspace_id=os.getenv("DEV_WORKSPACE_ID", DEFAULT_WORKSPACE_ID),
+    )
+
+
+def build_context(store: EntityStore | None = None, *, auth_provider: AuthProvider | None = None) -> AppContext:
     store = store or build_store()
     repos = build_repo_set(store)
 
@@ -55,6 +102,7 @@ def build_context(store: EntityStore | None = None) -> AppContext:
         agent_repos=agent_repos,
         integrations=integrations,
         orchestrator=orchestrator,
+        auth_provider=auth_provider or build_auth_provider(),
         default_workspace_id=DEFAULT_WORKSPACE_ID,
         default_user_id=DEFAULT_USER_ID,
     )

@@ -42,10 +42,15 @@ def test_mcp_health_route_is_served(seeded_ctx, monkeypatch):
 def test_web_and_mcp_channels_see_the_same_workspace_state(seeded_ctx, monkeypatch):
     """The REST API and the MCP adapter both call promise_app.tools against the same
     AppContext — a commitment created over one channel must be visible on the other."""
+    from promise_auth import AuthenticatedPrincipal, permissions_for_role
+
     monkeypatch.setattr(mcp_server, "ctx", seeded_ctx)
     app.dependency_overrides[deps.get_context] = lambda: seeded_ctx
-    app.dependency_overrides[deps.workspace_id] = lambda: seeded_ctx.default_workspace_id
-    app.dependency_overrides[deps.user_id] = lambda: seeded_ctx.default_user_id
+    app.dependency_overrides[deps.get_principal] = lambda: AuthenticatedPrincipal(
+        subject=f"local:{seeded_ctx.default_user_id}", user_id=seeded_ctx.default_user_id,
+        workspace_id=seeded_ctx.default_workspace_id, role="owner", permissions=permissions_for_role("owner"),
+        scopes=frozenset({"*"}), auth_method="local",
+    )
     try:
         client = TestClient(app)
         r = client.post("/api/commitments", json={"text": "I'll call Sam today."})

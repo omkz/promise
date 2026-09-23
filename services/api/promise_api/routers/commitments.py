@@ -5,10 +5,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, Response
 from promise_app import tools
 from promise_app.bootstrap import AppContext
+from promise_auth import AuthenticatedPrincipal, Permission, require
 from promise_domain.models import Commitment
 from pydantic import BaseModel
 
-from ..deps import get_context, user_id, workspace_id
+from ..deps import get_context, get_principal
 
 router = APIRouter(prefix="/api/commitments", tags=["commitments"])
 
@@ -37,14 +38,16 @@ class UpdateCommitmentBody(BaseModel):
 
 @router.get("")
 def list_commitments(
-    query: str = "", status: str | None = None, ws: str = Depends(workspace_id), ctx: AppContext = Depends(get_context)
+    query: str = "", status: str | None = None, principal: AuthenticatedPrincipal = Depends(get_principal),
+    ctx: AppContext = Depends(get_context),
 ) -> list[Commitment]:
-    return tools.search_commitments(ctx, workspace_id=ws, query=query, status=status)
+    require(principal, Permission.COMMITMENTS_READ)
+    return tools.search_commitments(ctx, workspace_id=principal.workspace_id, query=query, status=status)
 
 
 @router.post("")
 def create_commitment(
-    body: CreateCommitmentBody, response: Response, ws: str = Depends(workspace_id), uid: str = Depends(user_id),
+    body: CreateCommitmentBody, response: Response, principal: AuthenticatedPrincipal = Depends(get_principal),
     ctx: AppContext = Depends(get_context),
 ) -> dict[str, Any]:
     """Detect a commitment from free text. The response always distinguishes
@@ -52,52 +55,70 @@ def create_commitment(
     Commitment row actually written) — see `promise_app.tools.create_commitment`.
     Returns 201 only when a Commitment was created; 200 otherwise (not detected,
     or detected but below the auto-capture confidence threshold)."""
+    require(principal, Permission.COMMITMENTS_WRITE)
     result = tools.create_commitment(
-        ctx, workspace_id=ws, user_id=uid, text=body.text, source_system=body.source_system,
-        source_ref=body.source_ref, occurred_at=body.occurred_at, confirm=body.confirm,
+        ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, text=body.text,
+        source_system=body.source_system, source_ref=body.source_ref, occurred_at=body.occurred_at, confirm=body.confirm,
     )
     response.status_code = 201 if result["persisted"] else 200
     return result
 
 
 @router.get("/{commitment_id}")
-def get_commitment(commitment_id: str, ws: str = Depends(workspace_id), ctx: AppContext = Depends(get_context)) -> Commitment:
-    return tools.get_commitment(ctx, workspace_id=ws, commitment_id=commitment_id)
+def get_commitment(
+    commitment_id: str, principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
+) -> Commitment:
+    require(principal, Permission.COMMITMENTS_READ)
+    return tools.get_commitment(ctx, workspace_id=principal.workspace_id, commitment_id=commitment_id)
 
 
 @router.get("/{commitment_id}/context")
 def get_commitment_context(
-    commitment_id: str, limit: int | None = None, ws: str = Depends(workspace_id), uid: str = Depends(user_id),
+    commitment_id: str, limit: int | None = None, principal: AuthenticatedPrincipal = Depends(get_principal),
     ctx: AppContext = Depends(get_context),
 ) -> dict[str, Any]:
     """Ranked, explainable documents/messages relevant to completing this commitment
     (see `promise_app.tools.retrieve_commitment_context`). Read-only, does not mutate
     the commitment or trigger the agent."""
-    return tools.retrieve_commitment_context(ctx, workspace_id=ws, user_id=uid, commitment_id=commitment_id, limit=limit)
+    require(principal, Permission.CONTEXT_READ)
+    return tools.retrieve_commitment_context(
+        ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, commitment_id=commitment_id, limit=limit
+    )
 
 
 @router.patch("/{commitment_id}")
 def update_commitment(
-    commitment_id: str, body: UpdateCommitmentBody, ws: str = Depends(workspace_id), ctx: AppContext = Depends(get_context)
+    commitment_id: str, body: UpdateCommitmentBody, principal: AuthenticatedPrincipal = Depends(get_principal),
+    ctx: AppContext = Depends(get_context),
 ) -> Commitment:
+    require(principal, Permission.COMMITMENTS_WRITE)
     fields = {k: v for k, v in body.model_dump().items() if v is not None}
-    return tools.update_commitment(ctx, workspace_id=ws, commitment_id=commitment_id, **fields)
+    return tools.update_commitment(ctx, workspace_id=principal.workspace_id, commitment_id=commitment_id, **fields)
 
 
 @router.post("/{commitment_id}/handle")
 def handle_commitment(
-    commitment_id: str, ws: str = Depends(workspace_id), uid: str = Depends(user_id), ctx: AppContext = Depends(get_context)
+    commitment_id: str, principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
 ) -> dict[str, Any]:
     """Trigger the agent: retrieve context, plan an action, and request approval.
     This never executes a side effect by itself — see POST /api/actions/{id}/execute."""
-    return tools.handle_commitment(ctx, workspace_id=ws, user_id=uid, commitment_id=commitment_id, trigger="api.handle")
+    require(principal, Permission.AGENT_EXECUTE)
+    return tools.handle_commitment(
+        ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, commitment_id=commitment_id, trigger="api.handle"
+    )
 
 
 @router.post("/{commitment_id}/complete")
-def complete_commitment(commitment_id: str, ws: str = Depends(workspace_id), ctx: AppContext = Depends(get_context)) -> Commitment:
-    return tools.complete_commitment(ctx, workspace_id=ws, commitment_id=commitment_id)
+def complete_commitment(
+    commitment_id: str, principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
+) -> Commitment:
+    require(principal, Permission.COMMITMENTS_WRITE)
+    return tools.complete_commitment(ctx, workspace_id=principal.workspace_id, commitment_id=commitment_id)
 
 
 @router.post("/{commitment_id}/cancel")
-def cancel_commitment(commitment_id: str, ws: str = Depends(workspace_id), ctx: AppContext = Depends(get_context)) -> Commitment:
-    return tools.cancel_commitment(ctx, workspace_id=ws, commitment_id=commitment_id)
+def cancel_commitment(
+    commitment_id: str, principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
+) -> Commitment:
+    require(principal, Permission.COMMITMENTS_WRITE)
+    return tools.cancel_commitment(ctx, workspace_id=principal.workspace_id, commitment_id=commitment_id)

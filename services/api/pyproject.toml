@@ -5,6 +5,7 @@ description = "PROMISE REST API (FastAPI) — one channel over the shared applic
 requires-python = ">=3.10"
 dependencies = [
     "promise-app",
+    "promise-auth",
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.35,<1",
     "python-dotenv>=1.0,<2",
@@ -19,3 +20,4 @@ include = ["promise_api*"]
 
 [tool.uv.sources]
 promise-app = { workspace = true }
+promise-auth = { workspace = true }

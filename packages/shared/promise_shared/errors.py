@@ -98,3 +98,53 @@ class VerifiedContactRequiredError(PromiseError):
         super().__init__(f"a verified email is required for {who} before PROMISE can send this — none is on file")
         self.contact_id = contact_id
         self.contact_name = contact_name
+
+
+# ---- identity & authorization (see promise_auth) -----------------------------------------------
+#
+# Defined here, not in `promise_auth`, so every layer (including `promise_domain`/`promise_app`,
+# which must never depend on the auth package itself) can raise/catch them through the same
+# `PromiseError` taxonomy `services/api/promise_api/main.py` already maps centrally.
+
+
+class AuthenticationRequired(PromiseError):
+    """No credentials supplied at all: no `Authorization` header in `AUTH_MODE=oidc`, or no
+    resolvable identity in `AUTH_MODE=local`. Maps to HTTP 401."""
+
+    def __init__(self, detail: str = "authentication is required") -> None:
+        super().__init__(detail)
+
+
+class InvalidToken(PromiseError):
+    """The bearer token failed signature, issuer, audience, or format validation. Maps to
+    HTTP 401. Never raised from a JWT whose signature was not actually verified — see
+    `promise_auth.oidc.OIDCAuthProvider`."""
+
+    def __init__(self, detail: str = "invalid token") -> None:
+        super().__init__(detail)
+
+
+class TokenExpired(PromiseError):
+    """The bearer token's `exp` claim is in the past. Maps to HTTP 401."""
+
+    def __init__(self, detail: str = "token has expired") -> None:
+        super().__init__(detail)
+
+
+class InsufficientScope(PromiseError):
+    """The token/principal lacks a scope or permission required for this operation. Maps to
+    HTTP 403."""
+
+    def __init__(self, detail: str = "insufficient scope") -> None:
+        super().__init__(detail)
+
+
+class WorkspaceAccessDenied(PromiseError):
+    """The authenticated principal has no active membership in the requested workspace — a
+    distinct check from resource-level workspace scoping (which 404s; see `NotFoundError`).
+    This fires earlier, before any resource lookup, so it never reveals whether a specific
+    resource in that workspace exists. Maps to HTTP 403."""
+
+    def __init__(self, workspace_id: str) -> None:
+        super().__init__(f"no active membership in workspace '{workspace_id}'")
+        self.workspace_id = workspace_id

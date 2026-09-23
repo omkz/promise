@@ -3,7 +3,7 @@ name = "promise-app"
 version = "0.1.0"
 description = "PROMISE application layer: the services REST and MCP both call"
 requires-python = ">=3.10"
-dependencies = ["promise-domain", "promise-agent", "promise-integrations", "promise-shared"]
+dependencies = ["promise-domain", "promise-agent", "promise-integrations", "promise-shared", "promise-auth"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -17,3 +17,4 @@ promise-domain = { workspace = true }
 promise-agent = { workspace = true }
 promise-integrations = { workspace = true }
 promise-shared = { workspace = true }
+promise-auth = { workspace = true }

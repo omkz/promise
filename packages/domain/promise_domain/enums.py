@@ -91,3 +91,15 @@ class AgentStepStatus(str, Enum):
     COMPLETED = "completed"
     SKIPPED = "skipped"
     FAILED = "failed"
+
+
+class MembershipRole(str, Enum):
+    """Deliberately minimal — see WorkspaceMembership. Not a full RBAC matrix."""
+
+    OWNER = "owner"
+    MEMBER = "member"
+
+
+class MembershipStatus(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"

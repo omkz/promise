@@ -5,6 +5,7 @@ description = "PROMISE MCP adapter (Streamable HTTP) — Alexa+ and other MCP cl
 requires-python = ">=3.10"
 dependencies = [
     "promise-app",
+    "promise-auth",
     "mcp>=2.0,<3",
     "starlette>=0.47,<1",
     "uvicorn[standard]>=0.35,<1",
@@ -21,3 +22,4 @@ include = ["promise_mcp*"]
 
 [tool.uv.sources]
 promise-app = { workspace = true }
+promise-auth = { workspace = true }

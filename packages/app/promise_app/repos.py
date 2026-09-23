@@ -18,6 +18,7 @@ from promise_domain.models import (
     Message,
     User,
     Workspace,
+    WorkspaceMembership,
 )
 from promise_domain.repository import Repository
 from promise_shared.store import EntityStore
@@ -53,6 +54,7 @@ class WorkspaceRepository:
 class RepoSet:
     workspaces: WorkspaceRepository
     users: Repository[User]
+    memberships: Repository[WorkspaceMembership]
     contacts: Repository[Contact]
     documents: Repository[Document]
     messages: Repository[Message]
@@ -71,6 +73,7 @@ def build_repo_set(store: EntityStore) -> RepoSet:
     return RepoSet(
         workspaces=WorkspaceRepository(store),
         users=Repository(store, "user", User),
+        memberships=Repository(store, "workspace_membership", WorkspaceMembership),
         contacts=Repository(store, "contact", Contact),
         documents=Repository(store, "document", Document),
         messages=Repository(store, "message", Message),
