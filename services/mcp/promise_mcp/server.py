@@ -10,14 +10,13 @@ load_dotenv()
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
+from promise_app import tools
+from promise_app.bootstrap import build_context
+from promise_domain.models import Commitment, CommitmentSource, Contact
 from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-
-from promise_app import tools
-from promise_app.bootstrap import build_context
-from promise_domain.models import Commitment, CommitmentSource, Contact
 
 """PROMISE MCP adapter.
 

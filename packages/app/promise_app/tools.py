@@ -12,7 +12,6 @@ from promise_domain.enums import ApprovalStatus, IntegrationStatus
 from promise_domain.models import (
     Action,
     AgentRun,
-    AgentStep,
     Approval,
     AuditEvent,
     Commitment,

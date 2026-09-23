@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import Callable, Generic, TypeVar
 
-from pydantic import BaseModel
-
 from promise_shared.clock import iso_now
 from promise_shared.errors import ConflictError, NotFoundError
 from promise_shared.store import EntityStore
+from pydantic import BaseModel
 
 T = TypeVar("T", bound=BaseModel)
 

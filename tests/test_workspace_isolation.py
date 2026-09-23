@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import pytest
 from promise_app import tools
 from promise_app.bootstrap import AppContext
 from promise_domain.models import Workspace
 from promise_shared.errors import NotFoundError
 from promise_shared.ids import new_id
-import pytest
 
 
 def _second_workspace(ctx: AppContext) -> str:

@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
-
 from promise_shared.clock import iso_now
+from pydantic import BaseModel, Field
 
 from .enums import (
     ActionStatus,

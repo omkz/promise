@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from threading import RLock
-from typing import Any
 
 
 class LocalJsonEntityStore:

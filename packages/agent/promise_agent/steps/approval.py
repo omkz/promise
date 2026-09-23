@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from promise_domain.enums import ActionStatus, ApprovalStatus
-from promise_shared.clock import iso_now
-from promise_shared.errors import NotFoundError
-from promise_shared.ids import new_id
 from promise_domain.models import Approval
+from promise_shared.clock import iso_now
+from promise_shared.ids import new_id
 
 from ..context import AgentRepos
 

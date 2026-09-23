@@ -12,6 +12,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Node.js
+        # Node 22, matching services/mcp/Dockerfile's `node:22-slim` build stage —
+        # needed to build the MCP App UI bundle below before pytest runs.
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: services/mcp/ui/commitment-card/package-lock.json
+
+      - name: Build MCP App UI (commitment card)
+        # services/mcp/promise_mcp/server.py reads dist/index.html at import time,
+        # so tests/test_mcp_adapter.py and tests/test_mcp_apps_ui.py fail to even
+        # collect without it. dist/ is gitignored (build output, not source), so
+        # CI must build it itself — the same thing services/mcp/Dockerfile already
+        # does in its `ui-build` stage.
+        working-directory: services/mcp/ui/commitment-card
+        run: |
+          npm ci
+          npm run build
+
       - name: Install uv
         # astral-sh/setup-uv v10.2.0, pinned by commit SHA rather than the
         # mutable tag. version/python-version match services/*/Dockerfile

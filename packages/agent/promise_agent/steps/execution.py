@@ -32,8 +32,12 @@ def execute_action(action_id: str, workspace_id: str, repos: AgentRepos) -> Acti
         else:
             raise NotImplementedError(f"no executor for action type '{action.type}'")
     except Exception as exc:  # noqa: BLE001 - convert to a recorded failure, not a crash
+        # Python implicitly deletes `exc` at the end of this `except` block, so it can't be
+        # referenced from inside a closure defined here (ruff/pyflakes flags exactly that,
+        # correctly) — capture the message as a plain local first.
+        error_message = str(exc)
         return repos.actions.update(
-            workspace_id, action_id, lambda a: (setattr(a, "status", ActionStatus.FAILED), setattr(a, "error", str(exc)))
+            workspace_id, action_id, lambda a: (setattr(a, "status", ActionStatus.FAILED), setattr(a, "error", error_message))
         )
 
     return repos.actions.update(
