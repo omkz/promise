@@ -66,10 +66,10 @@ def test_handle_commitment_stops_with_verified_contact_required_when_contact_has
 
 
 def test_handle_commitment_with_no_named_contact_also_stops_rather_than_using_a_placeholder(ctx):
-    """No contact at all (e.g. "I'll finish the report today.") must never fall back to
-    a placeholder address like recipient@example.com — even though a relevant document
-    (matched by the commitment's own derived keywords, "report") exists and retrieval
-    finds it fine."""
+    """No contact at all, on an otherwise-plannable send-type commitment (e.g. "I'll
+    send the weekly report today."), must never fall back to a placeholder address
+    like recipient@example.com — even though a relevant document (matched by the
+    commitment's own derived keywords, "report") exists and retrieval finds it fine."""
     ctx.repos.documents.save(
         Document(
             id=new_id("doc"), workspace_id=ctx.default_workspace_id, name="Weekly_Report.txt",
@@ -77,7 +77,7 @@ def test_handle_commitment_with_no_named_contact_also_stops_rather_than_using_a_
         )
     )
     commitment = tools.create_commitment(
-        ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, text="I'll finish the report today."
+        ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, text="I'll send the weekly report today."
     )["commitment"]
     assert commitment.contact_id is None
 

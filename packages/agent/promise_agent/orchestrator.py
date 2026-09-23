@@ -8,11 +8,11 @@ from promise_shared.clock import iso_now
 from promise_shared.ids import new_id
 
 from . import audit
+from .action_planning import select_planner
 from .context import AgentRepos
 from .steps import approval as approval_step
 from .steps import completion as completion_step
 from .steps import execution as execution_step
-from .steps import planning as planning_step
 from .steps import retrieval as retrieval_step
 
 
@@ -64,11 +64,10 @@ class AgentOrchestrator:
                 context = retrieval_step.retrieve_context(commitment, contact, self.repos)
                 step.output_summary = f"{len(context['items'])} context item(s) ({context['status'].value})"
 
-            with self._step(agent_run, AgentStepName.PLANNING, ["llm.revise_document", "integration.create_draft"]) as step:
-                plan = planning_step.plan_send_revised_document(
-                    commitment, contact, context_items=context["items"], repos=self.repos, agent_run_id=agent_run.id
-                )
-                step.output_summary = f"Proposed action {plan['action'].id} ({plan['action'].type.value})"
+            with self._step(agent_run, AgentStepName.PLANNING, ["action_planner.select", "action_planner.plan"]) as step:
+                planner = select_planner(commitment)
+                plan = planner.plan(commitment, contact, context["items"], repos=self.repos, agent_run_id=agent_run.id)
+                step.output_summary = f"Proposed action {plan['action'].id} ({plan['action'].type.value}) via {planner.name}"
         except Exception as exc:  # noqa: BLE001
             agent_run.status = AgentRunStatus.FAILED
             agent_run.error = str(exc)
@@ -106,6 +105,7 @@ class AgentOrchestrator:
             "agent_run": agent_run,
             "commitment": self.repos.commitments.require(workspace_id, commitment_id),
             "contact": contact,
+            "action_plan": plan.get("action_plan"),
             "document": plan["document"],
             "changes": plan["changes"],
             "draft": plan["draft"],

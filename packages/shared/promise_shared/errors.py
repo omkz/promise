@@ -70,6 +70,24 @@ class ContextRetrievalProviderError(PromiseError):
         self.retryable = retryable
 
 
+class LLMProviderError(PromiseError):
+    """Raised when a configured LLM provider (e.g. Bedrock, for document revision)
+    fails to produce usable output.
+
+    Deliberately never swallowed into a silent fallback: `BEDROCK_ENABLED=true` is
+    an explicit choice to require a real model, so a failure there must fail the
+    agent run clearly (and, via `retryable`, tell the caller whether retrying is
+    expected to help) rather than quietly substitute deterministic mock output.
+    `BEDROCK_ENABLED=false` never raises this — the mock path is used directly,
+    not as a failure fallback.
+    """
+
+    def __init__(self, provider_name: str, detail: str, *, retryable: bool = True) -> None:
+        super().__init__(f"{provider_name} LLM provider failed: {detail}")
+        self.provider_name = provider_name
+        self.retryable = retryable
+
+
 class VerifiedContactRequiredError(PromiseError):
     """Raised when an external send action needs a contact with a verified email
     on file, and none is available. PROMISE never invents a contact email

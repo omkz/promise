@@ -232,11 +232,8 @@ wrappers over the same application service — no retrieval logic in either adap
 
 **Agent integration**: the RETRIEVAL step (`steps/retrieval.py`) builds a query from the
 commitment and runs `ContextRetriever` fresh each call (so a swapped `IntegrationProvider`,
-e.g. in tests, is always the one used); the PLANNING step
-(`steps/planning.py::plan_send_revised_document`) now takes a `list[ContextItem]` — never a
-raw string — and calls `get_file`/`get_message` for full content only after picking the
-top-ranked item, per DOCUMENT CONTENT in the spec (`ContextItem.snippet` is deliberately
-small).
+e.g. in tests, is always the one used) and hands its ranked `list[ContextItem]` — never a raw
+string — straight to the PLANNING step. See the next section for what PLANNING does with it.
 
 **Current limitation**: v1 is deterministic lexical/metadata retrieval (substring and token
 overlap over documents/messages already in the local/demo store), not semantic search — it
@@ -248,6 +245,68 @@ interfaces, without `ContextRetriever` or anything above it changing.
 **Try it**: `uv run pytest tests/test_context_retrieval.py tests/test_commitment_context_application.py`
 covers ranking, filtering, dedup, isolation, and provider-failure behavior in isolation, plus
 the commitment -> REST/MCP/agent integration path using the seeded Andi/Sarah demo data.
+
+## Action Planning Engine
+
+```
+Commitment -> Context Retrieval -> ActionPlanner -> ActionPlan -> Action (proposed) -> Approval -> Execution -> Completion
+```
+
+`packages/agent/promise_agent/action_planning/` separates *generic* action planning from the
+one specific workflow v1 actually supports ("send a revised document to a contact") — the
+same separation `commitment_extraction` and `context_retrieval` already establish elsewhere
+in `packages/agent`.
+
+- `planner.py`: `ActionPlanner` — receives a `Commitment`, its `Contact`, and the ranked
+  `list[ContextItem]` from retrieval; returns a proposed `Action`. An `ActionPlanner` never
+  executes a side effect, never requests approval, never marks a commitment complete, and
+  never touches FastAPI/MCP — those stay in `steps/approval.py`, `steps/execution.py`,
+  `steps/completion.py`, called only by `AgentOrchestrator`.
+- `schema.py`: `ActionPlan` — a small, explainable, pre-persistence structure
+  (`action_type`, `summary`, `rationale`, `approval_required`, `target_contact_id`,
+  `supporting_context_ids` — which `ContextItem`s justified the plan —, `payload`). It never
+  duplicates a field `Action` already owns; `payload`/`action_type` map straight onto the
+  `Action` a planner persists. `approval_required` is informational only (derived from
+  `promise_domain.enums.ACTION_TYPES_REQUIRING_APPROVAL`) — it never gates anything; approval
+  stays unconditional, exactly as before (see SECURITY below).
+- `send_message_planner.py`: `SendMessagePlanner`, the one concrete planner v1 ships. Nothing
+  Andi/Sarah/filename-specific is hard-coded into it: `supports()` recognizes the *general
+  shape* of a commitment (a send-type action verb — send/email/share/deliver/submit/forward),
+  and `plan()` works off whichever `ContextItem`s retrieval ranked highest for *this*
+  commitment. See `tests/test_action_planning.py::
+  test_planner_selection_is_not_hard_coded_to_any_specific_name_or_file` for the regression
+  proof (a different contact, different document, different workspace — same behavior).
+- `message_composer.py`: `MessageComposer` — v1 ships `DeterministicMessageComposer`, which
+  derives the draft's subject from the commitment's own title and its body from the real
+  `changes` list `llm.revise_document` already computed (never inventing a factual claim about
+  what changed), replacing what used to be a permanently hard-coded `subject="Revised
+  proposal"` / templated body. A future context-aware or Bedrock-assisted composer is a new
+  `MessageComposer` implementation, not a change to the planner.
+- `selection.py`: `select_planner(commitment)` — deterministic, no LLM (an LLM isn't needed to
+  choose between one supported planner and "unsupported"). Raises `PlanningError` ("PROMISE
+  does not yet know how to execute this commitment.") for any commitment type no registered
+  planner recognizes — never fabricates an action for it.
+
+**Orchestrator**: `AgentOrchestrator.run_handle_commitment`'s PLANNING step now calls
+`select_planner(commitment)` then `planner.plan(...)` directly — no planner-specific
+branching lives in the orchestrator itself, which stays focused on run/step lifecycle,
+audit, and the approval/execution/completion sequence (all unchanged).
+`packages/agent/promise_agent/steps/planning.py::plan_send_revised_document` remains as a
+thin, `SendMessagePlanner`-specific compatibility entry point.
+
+**Current limitation**: v1 supports exactly one action type — "send a revised document to a
+verified contact" — via `SendMessagePlanner`. Any other commitment (e.g. "call Sam") fails
+planning with a structured `PlanningError` rather than a fabricated action; adding a second
+planner is registering a new `ActionPlanner` in `selection.py`'s list, no orchestrator changes
+needed.
+
+**LLM reliability**: `packages/agent/promise_agent/llm.py::revise_document` follows the same
+rule as the commitment-extraction Bedrock provider: `BEDROCK_ENABLED=false` uses the
+deterministic `mock_revision` directly (not as a failure fallback), and
+`BEDROCK_ENABLED=true` + a real Bedrock failure raises `promise_shared.errors.
+LLMProviderError` (with a classified `retryable` flag) instead of silently substituting the
+mock — the agent run fails clearly, surfaced over REST as `503` with `{"provider",
+"retryable"}`. Local tests stay fully deterministic (`BEDROCK_ENABLED` unset/false).
 
 ## AWS mode
 
@@ -262,10 +321,12 @@ BEDROCK_ENABLED=true
 `packages/shared/promise_shared/store/dynamodb.py` implements a single-table adapter behind
 the same `EntityStore` interface the local JSON store implements, so nothing above the
 storage layer changes. `packages/agent/promise_agent/llm.py` (document revision) and
-`packages/agent/promise_agent/commitment_extraction/provider.py` (commitment detection)
-both call Bedrock when `BEDROCK_ENABLED=true` and fall back to a deterministic mock
-otherwise — local dev and CI never require live AWS credentials. See `infra/README.md` for
-deployment notes.
+`packages/agent/promise_agent/commitment_extraction/provider.py` (commitment detection) both
+call Bedrock only when `BEDROCK_ENABLED=true`; when it's unset/false, each uses its
+deterministic mock directly (not as a failure fallback) — local dev and CI never require
+live AWS credentials. With `BEDROCK_ENABLED=true`, a real Bedrock failure is never masked as
+a mock result: both raise a classified, retryable `PromiseError` (`LLMProviderError` /
+`ExtractionProviderError`) instead. See `infra/README.md` for deployment notes.
 
 ## Known limitations / next steps
 
