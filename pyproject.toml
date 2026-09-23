@@ -1,7 +1,40 @@
+[project]
+name = "promise"
+version = "0.1.0"
+description = "PROMISE monorepo — domain/application/agent packages plus REST and MCP service adapters"
+requires-python = ">=3.10"
+dependencies = [
+    "promise-service-api",
+    "promise-service-mcp",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1,<10",
+    "anyio>=4.15,<5",
+    "httpx>=0.28,<1",
+    "ruff>=0.8,<1",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*", "services/*"]
+
+[tool.uv.sources]
+promise-service-api = { workspace = true }
+promise-service-mcp = { workspace = true }
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
-[tool.setuptools]
-# Root has no package of its own; this file only carries shared dev tooling
-# config (pytest) for the workspace under packages/ and services/.
-py-modules = []
+[tool.ruff]
+line-length = 160
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+# E402: several adapters intentionally call `load_dotenv()` before importing
+# modules that read env vars at import time.
+ignore = ["E402"]

@@ -33,34 +33,43 @@ Each module carries docstrings explaining the reasoning behind individual design
 
 ## Local development
 
-Everything is one Python virtualenv with each package/service installed editable, plus the
-existing Next.js web app.
+The Python side is a single [uv](https://docs.astral.sh/uv/) workspace: the root
+`pyproject.toml`/`uv.lock` cover every `packages/*` and `services/*` member in one shared
+`.venv`, each installed editable. uv is the only Python dependency/environment manager for
+this repo — there is no `requirements.txt` and no bare `pip install`.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e packages/shared -e packages/domain -e packages/integrations \
-            -e packages/agent -e packages/app -e services/api -e services/mcp
+uv sync                              # creates .venv and installs every workspace member, editable
 
 cp services/api/.env.example services/api/.env
 cp services/mcp/.env.example services/mcp/.env
 
-python -m promise_app.seed          # seeds the default dev workspace (Andi/Sarah demo data)
+uv run python -m promise_app.seed    # seeds the default dev workspace (Andi/Sarah demo data)
 
-(cd services/api && uvicorn promise_api.main:app --reload --port 8000)   # REST
-(cd services/mcp && python -m promise_mcp.server)                        # MCP, in another shell
+(cd services/api && uv run uvicorn promise_api.main:app --reload --port 8000)   # REST
+(cd services/mcp && uv run python -m promise_mcp.server)                        # MCP, in another shell
 ```
 
 Both services default `LOCAL_DATA_DIR` to `../../data` (a shared file at the repo root), so
 the REST API, the MCP adapter, and the web app all read/write the same local workspace state
 without any extra wiring — a commitment created over MCP shows up over REST and vice versa.
 
+Adding a dependency:
+
+```bash
+uv add <package>                 # e.g. uv add pyjwt      — add to a specific member: uv add <package> --package promise-app
+uv add --dev <package>           # e.g. uv add --dev mypy — root dev-only tooling (dependency-groups.dev)
+```
+
+Both commands update `pyproject.toml` and `uv.lock` together — always commit both.
+
 ### Tests
 
 ```bash
-pip install pytest httpx   # once, alongside the editable installs above
-pytest
+uv run pytest
 ```
+
+Lint: `uv run ruff check packages services tests` (config in the root `pyproject.toml`).
 
 Covers: commitment extraction + source provenance, workspace isolation, the full
 commitment/action/approval lifecycle, approval enforcement, duplicate-action protection,
@@ -89,7 +98,7 @@ or database directly. Build it before running the server:
 
 ```bash
 (cd services/mcp/ui/commitment-card && npm install && npm run build)   # writes dist/index.html
-(cd services/mcp && python -m promise_mcp.server)                       # serves :8000, MCP endpoint at /mcp
+(cd services/mcp && uv run python -m promise_mcp.server)                # serves :8000, MCP endpoint at /mcp
 ```
 
 Inspect it locally with the [official MCP Inspector](https://github.com/modelcontextprotocol/inspector)

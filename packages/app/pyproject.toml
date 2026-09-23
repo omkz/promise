@@ -11,3 +11,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["promise_app*"]
+
+[tool.uv.sources]
+promise-domain = { workspace = true }
+promise-agent = { workspace = true }
+promise-integrations = { workspace = true }
+promise-shared = { workspace = true }

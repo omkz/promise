@@ -16,3 +16,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["promise_api*"]
+
+[tool.uv.sources]
+promise-app = { workspace = true }
