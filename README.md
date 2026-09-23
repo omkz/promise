@@ -157,6 +157,34 @@ outbound message, and stops — waiting for your explicit approval — before an
 Approving executes the send and completes the commitment; the whole run is recorded as an
 `AgentRun` with per-step detail and an audit trail.
 
+## Commitment Detection Engine
+
+`packages/agent/promise_agent/commitment_extraction/` turns free text into a validated
+`CommitmentExtraction` — is this a genuine first-person commitment, a suggestion, a
+hypothetical, someone else's obligation, a question, quoted speech, or a past action?
+(`extractor.py`, `schema.py`). It never touches DynamoDB, FastAPI, or MCP; the only caller
+that persists anything is `packages/agent/promise_agent/steps/extraction.py`.
+
+- `provider.py`: `CommitmentExtractionProvider` — `MockCommitmentExtractionProvider`
+  (deterministic, rule-based, no AWS credentials required — the default whenever
+  `BEDROCK_ENABLED` is false) and `BedrockCommitmentExtractionProvider` (Bedrock Converse
+  with tool-use, so the model's output is validated against `RawCommitmentExtraction`
+  rather than free-form JSON parsed out of text).
+- `temporal.py`: resolves a relative phrase ("tomorrow morning", "next Friday") against an
+  explicit reference `datetime` — the model only ever extracts the phrase as written, never
+  computes a date itself. An unqualified day defaults to the morning hour
+  (`PROMISE_DEFAULT_MORNING_HOUR`, similarly `_AFTERNOON_`/`_EVENING_`/`_NIGHT_`).
+- `dedupe.py`: a deterministic (not fuzzy/semantic) duplicate check on normalized
+  user + action + contact + due-date window.
+- `config.py`: `COMMITMENT_AUTO_CAPTURE_THRESHOLD` (default `0.80`) — below this confidence,
+  `promise_app.tools.create_commitment` returns `needs_confirmation=True` and persists
+  nothing until re-called with `confirm=True`.
+
+`tools.create_commitment`'s result always distinguishes `detected` (is this a personal
+commitment at all) from `persisted` (was a `Commitment` row actually written) — nothing is
+ever saved for a suggestion, question, other person's obligation, past action, or a
+detection below the confidence threshold.
+
 ## AWS mode
 
 ```env
@@ -169,9 +197,11 @@ BEDROCK_ENABLED=true
 
 `packages/shared/promise_shared/store/dynamodb.py` implements a single-table adapter behind
 the same `EntityStore` interface the local JSON store implements, so nothing above the
-storage layer changes. `packages/agent/promise_agent/llm.py` calls Bedrock when
-`BEDROCK_ENABLED=true` and falls back to a deterministic mock otherwise — local dev and CI
-never require live AWS credentials. See `infra/README.md` for deployment notes.
+storage layer changes. `packages/agent/promise_agent/llm.py` (document revision) and
+`packages/agent/promise_agent/commitment_extraction/provider.py` (commitment detection)
+both call Bedrock when `BEDROCK_ENABLED=true` and fall back to a deterministic mock
+otherwise — local dev and CI never require live AWS credentials. See `infra/README.md` for
+deployment notes.
 
 ## Known limitations / next steps
 

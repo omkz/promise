@@ -14,6 +14,7 @@ from promise_shared.errors import (
     ApprovalRequiredError,
     ConflictError,
     DuplicateActionError,
+    ExtractionProviderError,
     NotFoundError,
     PromiseError,
     WorkspaceAccessError,
@@ -51,6 +52,15 @@ def _duplicate_action(_: Request, exc: DuplicateActionError) -> JSONResponse:
 @app.exception_handler(ConflictError)
 def _conflict(_: Request, exc: ConflictError) -> JSONResponse:
     return JSONResponse({"error": str(exc)}, status_code=409)
+
+
+@app.exception_handler(ExtractionProviderError)
+def _extraction_provider_error(_: Request, exc: ExtractionProviderError) -> JSONResponse:
+    """A configured extraction provider (Bedrock) failed. Never masked as a mock
+    result — surfaced as a controlled, classified error the caller can act on."""
+    return JSONResponse(
+        {"error": str(exc), "provider": exc.provider_name, "retryable": exc.retryable}, status_code=503
+    )
 
 
 @app.exception_handler(ValueError)

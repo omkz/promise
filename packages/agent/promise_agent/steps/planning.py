@@ -4,7 +4,7 @@ import re
 
 from promise_domain.enums import ActionStatus, ActionType
 from promise_domain.models import Action, Commitment, Contact, Document
-from promise_shared.errors import PromiseError
+from promise_shared.errors import PromiseError, VerifiedContactRequiredError
 from promise_shared.ids import new_id
 
 from .. import llm
@@ -31,6 +31,13 @@ def plan_send_revised_document(
     """
     if not documents:
         raise PlanningError("No relevant document found for this commitment")
+    if contact is None or not contact.email:
+        # PROMISE never invents a contact email (e.g. from a first name) or sends to a
+        # placeholder address — an external send action stops here until a verified
+        # email is on file for this contact.
+        raise VerifiedContactRequiredError(
+            contact_id=contact.id if contact else None, contact_name=contact.name if contact else None
+        )
 
     source_doc = documents[0]
     feedback = messages[0]["content"] if messages else "Apply the latest available feedback."
@@ -46,13 +53,11 @@ def plan_send_revised_document(
     )
     repos.documents.save(revised_doc)
 
-    recipient = (contact.email or contact.name) if contact else "recipient@example.com"
-    recipient_name = contact.name if contact else "there"
     draft = repos.integration.create_draft(
         commitment.workspace_id,
-        recipient=recipient,
+        recipient=contact.email,
         subject="Revised proposal",
-        body=f"Hi {recipient_name},\n\nPlease find attached the revised proposal.\n\nBest,\nPROMISE",
+        body=f"Hi {contact.name},\n\nPlease find attached the revised proposal.\n\nBest,\nPROMISE",
         attachment_file_id=revised_doc.id,
     )
 

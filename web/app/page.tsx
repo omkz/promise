@@ -36,7 +36,14 @@ export default function Home() {
   async function detect() {
     if (!input.trim()) return;
     setBusy(true); setNotice("");
-    try { await createCommitment(input.trim()); setInput(""); await refresh(); setNotice("Commitment detected and remembered."); }
+    try {
+      const result = await createCommitment(input.trim());
+      setInput("");
+      await refresh();
+      if (result.persisted) setNotice("Commitment detected and remembered.");
+      else if (result.needs_confirmation) setNotice(result.message ?? "Not sure that's a commitment — try again to confirm.");
+      else setNotice(result.reason ?? "That didn't read as a personal commitment.");
+    }
     catch (e) { setNotice(e instanceof Error ? e.message : "Something went wrong"); }
     finally { setBusy(false); }
   }

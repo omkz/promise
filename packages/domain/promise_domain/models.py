@@ -85,8 +85,12 @@ class CommitmentSource(BaseModel):
     source_id: str
     excerpt: str
     occurred_at: str = Field(default_factory=iso_now)
+    """When the utterance/message itself happened — caller-supplied when known
+    (e.g. an Alexa transcript timestamp), never conflated with `created_at`."""
     confidence: float = 1.0
     created_at: str = Field(default_factory=iso_now)
+    """When PROMISE processed/persisted this source. Always processing time —
+    never accepted from a caller."""
 
 
 class Commitment(BaseModel):

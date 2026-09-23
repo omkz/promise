@@ -73,34 +73,57 @@ def commitment_card_view() -> str:
 
 
 class CreateCommitmentResult(BaseModel):
-    """Structured output schema for `create_commitment` (advertised in tools/list)."""
+    """Structured output schema for `create_commitment` (advertised in tools/list).
 
-    commitment: Commitment
-    source: CommitmentSource
+    `commitment`/`source` are only present when `persisted` is true: the engine
+    distinguishes actual personal commitments from suggestions, questions,
+    other people's obligations, past actions, etc. (see
+    `promise_agent.commitment_extraction`) and never writes a Commitment row
+    for anything that isn't one.
+    """
+
+    detected: bool
+    persisted: bool
+    needs_confirmation: bool = False
+    commitment: Commitment | None = None
+    source: CommitmentSource | None = None
     contact: Contact | None = None
+    reason: str | None = None
+    message: str | None = None
 
 
 @mcp.tool(meta={"ui": {"resourceUri": UI_RESOURCE_URI}})
 def create_commitment(
-    text: str, workspace_id: str | None = None, user_id: str | None = None, source_system: str = "alexa"
+    text: str, workspace_id: str | None = None, user_id: str | None = None, source_system: str = "alexa",
+    occurred_at: str | None = None, confirm: bool = False,
 ) -> Annotated[CallToolResult, CreateCommitmentResult]:
     """Detect and save a commitment from natural-language text, with provenance.
 
-    The tool is registered with `_meta.ui.resourceUri` pointing at the Commitment
-    Card view (see tools/list), and the call result additionally carries the same
-    pointer in its own `_meta` so a host can render the card straight from the
-    `tools/call` response without a second round trip.
+    Calls the same `promise_app.tools.create_commitment` application service as
+    the REST API — no extraction logic lives in this adapter. The tool is
+    registered with `_meta.ui.resourceUri` pointing at the Commitment Card view
+    (see tools/list); the call result carries the same pointer in its own
+    `_meta` only when a commitment was actually captured, so a host renders the
+    card only for a real capture rather than for a question/suggestion/etc.
+    Pass `occurred_at` (ISO 8601) when the host knows the utterance's own
+    timestamp (e.g. a transcript time), distinct from when PROMISE processes it.
+    Pass `confirm=true` to capture a prior `needs_confirmation` result anyway.
     """
     result = tools.create_commitment(
         ctx, workspace_id=workspace_id or ctx.default_workspace_id, user_id=user_id or ctx.default_user_id,
-        text=text, source_system=source_system,
+        text=text, source_system=source_system, occurred_at=occurred_at, confirm=confirm,
     )
-    commitment: Commitment = result["commitment"]
-    return CallToolResult(
-        content=[TextContent(type="text", text=f'Commitment captured: "{commitment.title}"')],
-        structuredContent=_dump(result),
-        _meta={"ui": {"resourceUri": UI_RESOURCE_URI}},
-    )
+    structured = {k: result.get(k) for k in CreateCommitmentResult.model_fields}
+
+    if result["persisted"]:
+        commitment: Commitment = result["commitment"]
+        return CallToolResult(
+            content=[TextContent(type="text", text=f'Commitment captured: "{commitment.title}"')],
+            structuredContent=_dump(structured),
+            _meta={"ui": {"resourceUri": UI_RESOURCE_URI}},
+        )
+    message = result["message"] if result["needs_confirmation"] else result["reason"]
+    return CallToolResult(content=[TextContent(type="text", text=message)], structuredContent=_dump(structured))
 
 
 @mcp.tool()

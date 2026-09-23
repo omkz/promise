@@ -1,35 +1,86 @@
 from __future__ import annotations
 
-import os
-import re
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime
+from typing import Any
 
-from promise_domain.enums import CommitmentStatus, Priority
+from promise_domain.enums import CommitmentStatus
 from promise_domain.models import Commitment, CommitmentSource, Contact
 from promise_shared.clock import iso_now
 from promise_shared.ids import new_id
 
+from ..commitment_extraction import CommitmentExtraction, CommitmentExtractor, ExtractionCategory, config, find_duplicate
 from ..context import AgentRepos
 
-_ACTION_PATTERN = re.compile(
-    r"\b(?:send|email|deliver|share|submit|finish|review|call|follow up|follow-up|check|confirm)\b(.+?)"
-    r"(?:\s+tomorrow|\s+today|$)",
-    re.I,
-)
-_PERSON_PATTERN = re.compile(r"\b(?:to|send|email|share|deliver|submit)\s+([A-Z][a-zA-Z'-]+)")
+"""Application-facing commitment extraction step.
+
+This is the only place that persists anything: `CommitmentExtractor` (see
+`promise_agent.commitment_extraction`) is a pure text -> `CommitmentExtraction`
+transformation with no knowledge of repositories, DynamoDB, FastAPI, or MCP.
+This module owns everything downstream of that: the auto-capture confidence
+gate, contact lookup/creation, duplicate prevention, and writing the
+`Commitment`/`CommitmentSource` pair with full provenance.
+"""
+
+_NOT_A_COMMITMENT_REASONS = {
+    ExtractionCategory.SUGGESTION: "The statement reads as a suggestion, not a commitment you made.",
+    ExtractionCategory.HYPOTHETICAL: "The statement reads as hypothetical, not a commitment you made.",
+    ExtractionCategory.OTHER_PERSON_OBLIGATION: "This describes someone else's obligation, not something you committed to.",
+    ExtractionCategory.QUOTED: "This reports what someone else said, not your own commitment.",
+    ExtractionCategory.QUESTION: "This is a question or request, not a personal commitment.",
+    ExtractionCategory.PAST_ACTION: "This describes something already done, not an open commitment.",
+    ExtractionCategory.NONE: "No personal commitment was detected in that statement.",
+}
 
 
-def _parse_due(text: str) -> str | None:
-    tz_name = os.getenv("PROMISE_TIMEZONE", "Asia/Jakarta")
-    now = datetime.now(ZoneInfo(tz_name))
-    lower = text.lower()
-    if "tomorrow" in lower:
-        hour = 9 if "morning" in lower else now.hour
-        return (now + timedelta(days=1)).replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
-    if "today" in lower:
-        return now.replace(hour=max(now.hour, 9), minute=0, second=0, microsecond=0).isoformat()
-    return None
+def _not_detected(extraction: CommitmentExtraction) -> dict[str, Any]:
+    return {
+        "detected": False,
+        "persisted": False,
+        "needs_confirmation": False,
+        "duplicate": False,
+        "commitment": None,
+        "source": None,
+        "contact": None,
+        "extraction": extraction,
+        "reason": _NOT_A_COMMITMENT_REASONS.get(extraction.category, _NOT_A_COMMITMENT_REASONS[ExtractionCategory.NONE]),
+    }
+
+
+def _needs_confirmation(extraction: CommitmentExtraction) -> dict[str, Any]:
+    return {
+        "detected": True,
+        "persisted": False,
+        "needs_confirmation": True,
+        "duplicate": False,
+        "commitment": None,
+        "source": None,
+        "contact": None,
+        "extraction": extraction,
+        "message": f'I\'m thinking this may be a commitment: "{extraction.action or extraction.source_excerpt}". Capture it?',
+    }
+
+
+def _resolve_contact(workspace_id: str, contact_name: str | None, repos: AgentRepos) -> Contact | None:
+    if not contact_name:
+        return None
+    existing = next((c for c in repos.contacts.list(workspace_id) if c.name.lower() == contact_name.lower()), None)
+    if existing:
+        return existing
+    # A contact created from a bare detected name has no verified email — PROMISE never
+    # invents one (e.g. "andi@example.com" from the name "Andi"). Anything that needs to
+    # actually send to this contact must check `contact.email` first; see
+    # `promise_agent.steps.planning` and `promise_app.tools.create_draft`.
+    return repos.contacts.save(Contact(id=new_id("con"), workspace_id=workspace_id, name=contact_name, email=None))
+
+
+def _validate_occurred_at(occurred_at: str | None) -> str | None:
+    if occurred_at is None:
+        return None
+    try:
+        datetime.fromisoformat(occurred_at)
+    except ValueError as exc:
+        raise ValueError(f"invalid occurred_at timestamp: {occurred_at!r}") from exc
+    return occurred_at
 
 
 def extract_commitment(
@@ -41,45 +92,72 @@ def extract_commitment(
     source_type: str = "conversation",
     source_system: str = "web",
     source_ref: str | None = None,
-) -> dict:
-    """Deterministically detect a commitment in free text and persist it with provenance.
+    occurred_at: str | None = None,
+    confirm: bool = False,
+    extractor: CommitmentExtractor | None = None,
+    now: datetime | None = None,
+    timezone: str | None = None,
+) -> dict[str, Any]:
+    """Detect a commitment in free text and, when it clears the auto-capture
+    bar, persist it with full provenance.
 
-    This is intentionally rule-based rather than model-based: commitment
-    detection has to be reproducible and auditable ("why do you think I
-    promised this?"), and a regex match is trivially explainable. A future
-    version can add an LLM-assisted extractor behind the same signature.
+    `occurred_at`, when the caller has it (e.g. an Alexa transcript timestamp,
+    or an email's original send time), is the source/utterance's own
+    timestamp — kept distinct from `CommitmentSource.created_at`, which is
+    always when PROMISE actually processed/persisted it. When the caller
+    doesn't have one, `occurred_at` falls back to processing time too, since
+    that's the best available estimate — but the two remain independent
+    fields, never silently conflated.
+
+    Returns a dict always carrying `detected`/`persisted`/`extraction`; when
+    `is_commitment` is false nothing is written (see `_not_detected`), and
+    when it's true but under-confident nothing is written either until the
+    caller re-invokes with `confirm=True` (see `_needs_confirmation`).
     """
-    clean = text.strip()
-    match = _ACTION_PATTERN.search(clean)
-    action = match.group(0).strip() if match else clean
-    confidence = 0.9 if match else 0.5
+    occurred_at = _validate_occurred_at(occurred_at)
+    extractor = extractor or CommitmentExtractor()
+    extraction = extractor.extract(text, now=now, timezone=timezone)
 
-    contact: Contact | None = None
-    person_match = _PERSON_PATTERN.search(clean)
-    if person_match:
-        name = person_match.group(1)
-        existing = next(
-            (c for c in repos.contacts.list(workspace_id) if c.name.lower() == name.lower()),
-            None,
-        )
-        contact = existing or repos.contacts.save(
-            Contact(id=new_id("con"), workspace_id=workspace_id, name=name, email=f"{name.lower()}@example.com")
-        )
+    if not extraction.is_commitment:
+        return _not_detected(extraction)
 
+    if extraction.confidence < config.auto_capture_threshold() and not confirm:
+        return _needs_confirmation(extraction)
+
+    contact = _resolve_contact(workspace_id, extraction.contact_name, repos)
+
+    existing = repos.commitments.list(workspace_id)
+    duplicate = find_duplicate(
+        existing, user_id=user_id, action=extraction.action, contact_id=contact.id if contact else None, due_at=extraction.due_at
+    )
+    if duplicate is not None:
+        source = repos.sources.get(workspace_id, duplicate.source_id) if duplicate.source_id else None
+        return {
+            "detected": True,
+            "persisted": True,
+            "needs_confirmation": False,
+            "duplicate": True,
+            "commitment": duplicate,
+            "source": source,
+            "contact": contact,
+            "extraction": extraction,
+        }
+
+    action_text = extraction.action or extraction.source_excerpt
     commitment_id = new_id("com")
     source_id = new_id("src")
     commitment = Commitment(
         id=commitment_id,
         workspace_id=workspace_id,
         user_id=user_id,
-        action=action,
-        title=action,
-        description=clean,
+        action=action_text,
+        title=action_text,
+        description=extraction.source_excerpt,
         contact_id=contact.id if contact else None,
-        due_at=_parse_due(clean),
-        priority=Priority.HIGH if any(k in clean.lower() for k in ["tomorrow", "today", "urgent"]) else Priority.MEDIUM,
+        due_at=extraction.due_at,
+        priority=extraction.priority,
         status=CommitmentStatus.OPEN,
-        confidence=confidence,
+        confidence=extraction.confidence,
         source_id=source_id,
     )
     source = CommitmentSource(
@@ -89,10 +167,21 @@ def extract_commitment(
         source_type=source_type,
         source_system=source_system,
         source_id=source_ref or f"{source_system}:{new_id('evt')}",
-        excerpt=clean,
-        occurred_at=iso_now(),
-        confidence=confidence,
+        excerpt=extraction.source_excerpt,
+        occurred_at=occurred_at or iso_now(),
+        confidence=extraction.confidence,
+        # created_at is left to its own default_factory (promise_shared.clock.iso_now) so it
+        # always reflects processing time — it is never accepted from a caller.
     )
     repos.commitments.save(commitment)
     repos.sources.save(source)
-    return {"commitment": commitment, "source": source, "contact": contact}
+    return {
+        "detected": True,
+        "persisted": True,
+        "needs_confirmation": False,
+        "duplicate": False,
+        "commitment": commitment,
+        "source": source,
+        "contact": contact,
+        "extraction": extraction,
+    }

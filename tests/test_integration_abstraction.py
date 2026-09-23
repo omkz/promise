@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from promise_app import tools
+from promise_domain.models import Contact
+from promise_shared.ids import new_id
 
 
 class FakeIntegrationProvider:
@@ -45,6 +47,12 @@ def test_agent_retrieval_and_planning_work_against_a_swapped_provider(ctx):
     fake = FakeIntegrationProvider()
     ctx.integrations.register(fake)
     ctx.agent_repos.integration = fake  # same object the orchestrator holds
+
+    # A verified email must already be on file for the send step to proceed — PROMISE
+    # never invents one from a bare detected name (see promise_shared.errors.
+    # VerifiedContactRequiredError). This is a real, explicitly-provided address, not a
+    # system-fabricated one.
+    ctx.repos.contacts.save(Contact(id=new_id("con"), workspace_id=ctx.default_workspace_id, name="Priya", email="priya@example.com"))
 
     commitment = tools.create_commitment(
         ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, text="I'll send Priya the update today."

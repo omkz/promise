@@ -59,10 +59,20 @@ export const getCommitments = (query = "", status?: string) =>
 
 export const getCommitment = (id: string) => request<Commitment>(`/api/commitments/${id}`);
 
-export const createCommitment = (text: string, source_system: "web" | "alexa" = "web") =>
-  request<{ commitment: Commitment; contact: Contact | null }>(`/api/commitments`, {
+export type CreateCommitmentResult = {
+  detected: boolean;
+  persisted: boolean;
+  needs_confirmation: boolean;
+  commitment: Commitment | null;
+  contact: Contact | null;
+  reason?: string | null;
+  message?: string | null;
+};
+
+export const createCommitment = (text: string, source_system: "web" | "alexa" = "web", confirm = false) =>
+  request<CreateCommitmentResult>(`/api/commitments`, {
     method: "POST",
-    body: JSON.stringify({ text, source_system }),
+    body: JSON.stringify({ text, source_system, confirm }),
   });
 
 export const handleCommitment = (commitmentId: string) =>

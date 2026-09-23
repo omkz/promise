@@ -19,7 +19,7 @@ from promise_domain.models import (
     Document,
     IntegrationAccount,
 )
-from promise_shared.errors import NotFoundError
+from promise_shared.errors import NotFoundError, VerifiedContactRequiredError
 from promise_shared.ids import new_id
 
 from .bootstrap import AppContext
@@ -36,10 +36,21 @@ this logic — they only translate transport <-> these functions.
 # ---- commitments -----------------------------------------------------------
 
 def create_commitment(
-    ctx: AppContext, *, workspace_id: str, user_id: str, text: str, source_system: str = "web", source_ref: str | None = None
+    ctx: AppContext, *, workspace_id: str, user_id: str, text: str, source_system: str = "web",
+    source_ref: str | None = None, occurred_at: str | None = None, confirm: bool = False,
 ) -> dict[str, Any]:
+    """Detect a commitment in `text` and, when it clears the auto-capture confidence
+    bar, persist it with provenance. If the detector isn't confident enough, nothing
+    is persisted and the result carries `needs_confirmation=True` instead — re-call
+    with `confirm=True` to capture it anyway. If the text isn't a personal commitment
+    at all, nothing is persisted and the result carries `detected=False`.
+
+    `occurred_at` is the source/utterance's own timestamp when the caller has one (an
+    Alexa transcript time, an email's send time, ...) — kept distinct from the
+    `CommitmentSource.created_at` PROMISE always stamps at processing time."""
     result = extraction_step.extract_commitment(
-        text, workspace_id, user_id, ctx.agent_repos, source_system=source_system, source_ref=source_ref
+        text, workspace_id, user_id, ctx.agent_repos, source_system=source_system, source_ref=source_ref,
+        occurred_at=occurred_at, confirm=confirm,
     )
     return result
 
@@ -128,10 +139,14 @@ def prepare_revision(ctx: AppContext, *, workspace_id: str, document_id: str, fe
 
 def create_draft(ctx: AppContext, *, workspace_id: str, contact_id: str, document_id: str) -> dict[str, Any]:
     contact = ctx.repos.contacts.require(workspace_id, contact_id)
+    if not contact.email:
+        # Never send to a fabricated address (e.g. the contact's name) — stop with a clear,
+        # actionable error instead.
+        raise VerifiedContactRequiredError(contact_id=contact.id, contact_name=contact.name)
     document = get_file(ctx, workspace_id=workspace_id, file_id=document_id)
     draft = ctx.integrations.get().create_draft(
         workspace_id,
-        recipient=contact.email or contact.name,
+        recipient=contact.email,
         subject="Revised proposal",
         body=f"Hi {contact.name},\n\nPlease find attached the revised proposal.\n\nBest,\nPROMISE",
         attachment_file_id=document["id"],

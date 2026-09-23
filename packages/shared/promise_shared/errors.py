@@ -35,3 +35,32 @@ class DuplicateActionError(PromiseError):
 
 class ConflictError(PromiseError):
     """Optimistic-concurrency violation: the stored version does not match expectations."""
+
+
+class ExtractionProviderError(PromiseError):
+    """Raised when a configured extraction provider (e.g. Bedrock) fails.
+
+    Deliberately never swallowed into a silent fallback: when a provider is
+    explicitly configured (`BEDROCK_ENABLED=true`) and it fails, callers must
+    see a controlled error rather than a mock result masquerading as a real
+    one. `retryable` tells the caller whether retrying the same request is
+    expected to help (throttling, timeouts, transient network errors) versus
+    not (bad credentials, malformed request, no valid response).
+    """
+
+    def __init__(self, provider_name: str, detail: str, *, retryable: bool = True) -> None:
+        super().__init__(f"{provider_name} extraction provider failed: {detail}")
+        self.provider_name = provider_name
+        self.retryable = retryable
+
+
+class VerifiedContactRequiredError(PromiseError):
+    """Raised when an external send action needs a contact with a verified email
+    on file, and none is available. PROMISE never invents a contact email
+    (e.g. from a first name) to work around this."""
+
+    def __init__(self, *, contact_id: str | None = None, contact_name: str | None = None) -> None:
+        who = f"'{contact_name}'" if contact_name else (contact_id or "the recipient")
+        super().__init__(f"a verified email is required for {who} before PROMISE can send this — none is on file")
+        self.contact_id = contact_id
+        self.contact_name = contact_name

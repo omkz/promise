@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from promise_app import tools
 from promise_app.bootstrap import AppContext
 from promise_domain.models import Commitment
@@ -17,6 +17,13 @@ class CreateCommitmentBody(BaseModel):
     text: str
     source_system: str = "web"
     source_ref: str | None = None
+    occurred_at: str | None = None
+    """The source/utterance's own timestamp (ISO 8601, timezone-aware), when the caller
+    has one — e.g. an Alexa transcript time. Kept distinct from the server-stamped
+    processing time. Falls back to processing time when omitted."""
+    confirm: bool = False
+    """Set true to capture a below-threshold detection that previously came back
+    with `needs_confirmation=True` (see POST /api/commitments response)."""
 
 
 class UpdateCommitmentBody(BaseModel):
@@ -35,13 +42,22 @@ def list_commitments(
     return tools.search_commitments(ctx, workspace_id=ws, query=query, status=status)
 
 
-@router.post("", status_code=201)
+@router.post("")
 def create_commitment(
-    body: CreateCommitmentBody, ws: str = Depends(workspace_id), uid: str = Depends(user_id), ctx: AppContext = Depends(get_context)
+    body: CreateCommitmentBody, response: Response, ws: str = Depends(workspace_id), uid: str = Depends(user_id),
+    ctx: AppContext = Depends(get_context),
 ) -> dict[str, Any]:
-    return tools.create_commitment(
-        ctx, workspace_id=ws, user_id=uid, text=body.text, source_system=body.source_system, source_ref=body.source_ref
+    """Detect a commitment from free text. The response always distinguishes
+    `detected` (is this a personal commitment at all) from `persisted` (was a
+    Commitment row actually written) — see `promise_app.tools.create_commitment`.
+    Returns 201 only when a Commitment was created; 200 otherwise (not detected,
+    or detected but below the auto-capture confidence threshold)."""
+    result = tools.create_commitment(
+        ctx, workspace_id=ws, user_id=uid, text=body.text, source_system=body.source_system,
+        source_ref=body.source_ref, occurred_at=body.occurred_at, confirm=body.confirm,
     )
+    response.status_code = 201 if result["persisted"] else 200
+    return result
 
 
 @router.get("/{commitment_id}")
