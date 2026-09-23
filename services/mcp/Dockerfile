@@ -4,7 +4,9 @@ COPY services/mcp/ui/commitment-card .
 RUN npm install && npm run build
 
 FROM python:3.12-slim
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+# Pinned uv 0.12.18 by tag+digest (immutable): matches the version this repo
+# resolves/locks with locally and in CI (see .github/workflows/ci.yml).
+COPY --from=ghcr.io/astral-sh/uv:0.12.18@sha256:3adc3706091ce7c2fe595e669628caedd6d951551b92b258b7e7dbe06d9440bc /uv /uvx /usr/local/bin/
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
 

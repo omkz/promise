@@ -18,6 +18,10 @@ dev = [
 
 [tool.uv]
 package = false
+# Pinned to match the uv version used in Docker (services/*/Dockerfile) and
+# CI (.github/workflows/ci.yml) exactly, so `uv sync`/`uv lock` behave
+# identically everywhere this project is built.
+required-version = "==0.12.18"
 
 [tool.uv.workspace]
 members = ["packages/*", "services/*"]
