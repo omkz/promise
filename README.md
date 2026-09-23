@@ -253,9 +253,8 @@ Commitment -> Context Retrieval -> ActionPlanner -> ActionPlan -> Action (propos
 ```
 
 `packages/agent/promise_agent/action_planning/` separates *generic* action planning from the
-one specific workflow v1 actually supports ("send a revised document to a contact") — the
-same separation `commitment_extraction` and `context_retrieval` already establish elsewhere
-in `packages/agent`.
+specific workflows v1 actually supports — the same separation `commitment_extraction` and
+`context_retrieval` already establish elsewhere in `packages/agent`.
 
 - `planner.py`: `ActionPlanner` — receives a `Commitment`, its `Contact`, and the ranked
   `list[ContextItem]` from retrieval; returns a proposed `Action`. An `ActionPlanner` never
@@ -269,21 +268,36 @@ in `packages/agent`.
   `Action` a planner persists. `approval_required` is informational only (derived from
   `promise_domain.enums.ACTION_TYPES_REQUIRING_APPROVAL`) — it never gates anything; approval
   stays unconditional, exactly as before (see SECURITY below).
-- `send_message_planner.py`: `SendMessagePlanner`, the one concrete planner v1 ships. Nothing
-  Andi/Sarah/filename-specific is hard-coded into it: `supports()` recognizes the *general
-  shape* of a commitment (a send-type action verb — send/email/share/deliver/submit/forward),
-  and `plan()` works off whichever `ContextItem`s retrieval ranked highest for *this*
-  commitment. See `tests/test_action_planning.py::
-  test_planner_selection_is_not_hard_coded_to_any_specific_name_or_file` for the regression
-  proof (a different contact, different document, different workspace — same behavior).
-- `message_composer.py`: `MessageComposer` — v1 ships `DeterministicMessageComposer`, which
-  derives the draft's subject from the commitment's own title and its body from the real
-  `changes` list `llm.revise_document` already computed (never inventing a factual claim about
-  what changed), replacing what used to be a permanently hard-coded `subject="Revised
-  proposal"` / templated body. A future context-aware or Bedrock-assisted composer is a new
-  `MessageComposer` implementation, not a change to the planner.
+- **Two concrete planners, mutually exclusive by construction** — a plain
+  "send/email/share/deliver/submit/forward" verb never, by itself, implies a revision:
+  - `send_message_planner.py`: `SendRevisedDocumentPlanner` (alias: `SendMessagePlanner`, for
+    backward compatibility) — "send the *revised/updated* X". The only planner that ever calls
+    `llm.revise_document`; `supports()` requires both a send-type verb *and* a revision signal
+    (revise/revised/revision/update/updated/incorporate feedback/...; see
+    `action_planning/_signals.py`).
+  - `send_existing_document_planner.py`: `SendExistingDocumentPlanner` — "send X" with no
+    revision language. Attaches the document exactly as retrieval found it — no
+    `llm.revise_document` call, no new `Document` row. `supports()` requires a send-type verb
+    *and the absence* of a revision signal.
+
+  Nothing Andi/Sarah/filename-specific is hard-coded into either: both recognize the *general
+  shape* of a commitment via `action_planning/_signals.py`, and `plan()` works off whichever
+  `ContextItem`s retrieval ranked highest for *this* commitment. See
+  `tests/test_action_planning.py::
+  test_revision_planner_selection_is_not_hard_coded_to_any_specific_name_or_file` and
+  `test_existing_document_planner_selection_is_not_hard_coded_to_any_specific_name_or_file`
+  for the regression proof (a different contact, different document, different workspace —
+  same behavior).
+- `message_composer.py`: `MessageComposer` — v1 ships `DeterministicMessageComposer`, with two
+  methods: `compose` (for a revision — derives the subject from the commitment's own title and
+  the body from the real `changes` list `llm.revise_document` already computed, never
+  inventing a factual claim about what changed) and `compose_existing_document` (for a plain
+  send — no "summary of changes" section at all, since nothing was revised). Both replace what
+  used to be a permanently hard-coded `subject="Revised proposal"` / templated body. A future
+  context-aware or Bedrock-assisted composer is a new `MessageComposer` implementation, not a
+  change to either planner.
 - `selection.py`: `select_planner(commitment)` — deterministic, no LLM (an LLM isn't needed to
-  choose between one supported planner and "unsupported"). Raises `PlanningError` ("PROMISE
+  choose between two supported planners and "unsupported"). Raises `PlanningError` ("PROMISE
   does not yet know how to execute this commitment.") for any commitment type no registered
   planner recognizes — never fabricates an action for it.
 
@@ -292,13 +306,16 @@ in `packages/agent`.
 branching lives in the orchestrator itself, which stays focused on run/step lifecycle,
 audit, and the approval/execution/completion sequence (all unchanged).
 `packages/agent/promise_agent/steps/planning.py::plan_send_revised_document` remains as a
-thin, `SendMessagePlanner`-specific compatibility entry point.
+thin, `SendRevisedDocumentPlanner`-specific compatibility entry point.
 
-**Current limitation**: v1 supports exactly one action type — "send a revised document to a
-verified contact" — via `SendMessagePlanner`. Any other commitment (e.g. "call Sam") fails
-planning with a structured `PlanningError` rather than a fabricated action; adding a second
-planner is registering a new `ActionPlanner` in `selection.py`'s list, no orchestrator changes
-needed.
+**Current limitation**: v1 supports exactly two action types, both `SEND_MESSAGE` — "send the
+revised document" and "send the existing document" — to a verified contact. Any other
+commitment (e.g. "call Sam") fails planning with a structured `PlanningError` rather than a
+fabricated action; adding a third planner is registering a new `ActionPlanner` in
+`selection.py`'s list, no orchestrator changes needed. The orchestrator's result dict
+(`document`/`changes`/`draft`/`action` keys) is still shaped around what these two planners
+both happen to return — a planner producing a genuinely different shape would need that
+generalized too.
 
 **LLM reliability**: `packages/agent/promise_agent/llm.py::revise_document` follows the same
 rule as the commitment-extraction Bedrock provider: `BEDROCK_ENABLED=false` uses the

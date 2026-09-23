@@ -4,7 +4,8 @@ from .message_composer import ComposedMessage, DeterministicMessageComposer, Mes
 from .planner import ActionPlanner, PlanningError
 from .schema import ActionPlan
 from .selection import select_planner
-from .send_message_planner import SendMessagePlanner
+from .send_existing_document_planner import SendExistingDocumentPlanner
+from .send_message_planner import SendMessagePlanner, SendRevisedDocumentPlanner
 
 __all__ = [
     "ActionPlan",
@@ -13,6 +14,8 @@ __all__ = [
     "DeterministicMessageComposer",
     "MessageComposer",
     "PlanningError",
+    "SendExistingDocumentPlanner",
     "SendMessagePlanner",
+    "SendRevisedDocumentPlanner",
     "select_planner",
 ]

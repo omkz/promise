@@ -11,43 +11,40 @@ from promise_shared.ids import new_id
 from .. import llm
 from ..context import AgentRepos
 from ..context_retrieval import ContextItem, ContextItemType
+from . import _signals
 from .message_composer import DeterministicMessageComposer, MessageComposer
 from .planner import PlanningError
 from .schema import ActionPlan
 
-"""The one concrete planner v1 ships: "send a revised document to a contact".
-
-This is where the *specific* "Andi proposal" workflow lives now — nothing
-Andi/Sarah/proposal-specific is hard-coded here. `supports()` recognizes the
-*general shape* of the commitment (a send-type action verb — see
-`_SEND_TYPE_VERBS`), and `plan()` selects whichever document/message
-`ContextItem`s the retrieval engine ranked highest for *this* commitment.
-A commitment about a different contact and a different document works
-identically; see `tests/test_action_planning.py::
+""""Send a *revised* document to a contact" — one of the two concrete planners
+v1 ships (see `send_existing_document_planner.py` for the plain "send it as
+it already exists" case). Nothing Andi/Sarah/proposal-specific is hard-coded
+here: `supports()` recognizes the *general shape* of the commitment (a
+send-type action verb AND a revision signal — see `action_planning._signals`),
+and `plan()` selects whichever document/message `ContextItem`s the retrieval
+engine ranked highest for *this* commitment. A commitment about a different
+contact and a different document works identically; see
+`tests/test_action_planning.py::
 test_planner_selection_is_not_hard_coded_to_any_specific_name_or_file`.
+
+Only this planner ever calls `llm.revise_document` — a generic "send/email/
+share" commitment with no revision language routes to
+`SendExistingDocumentPlanner` instead and never touches the LLM at all.
 """
 
-# A commitment whose action verb suggests "deliver something to someone" — not
-# any particular subject matter. Mirrors the send-type verbs the commitment
-# extraction engine already recognizes (`promise_agent.commitment_extraction.
-# provider._ACTION_VERBS`), restricted to the ones that mean "send an artifact"
-# rather than e.g. "call"/"review"/"check", which this planner doesn't cover.
-_SEND_TYPE_VERBS = ("send", "email", "share", "deliver", "submit", "forward")
 
+class SendRevisedDocumentPlanner:
+    """Prepares a *revised* document + outbound draft for a "send the revised/
+    updated X to contact" commitment, and proposes a `SEND_MESSAGE` `Action` —
+    never sends it, never requests approval, never completes the commitment."""
 
-class SendMessagePlanner:
-    """Prepares a revised document + outbound draft for a "send X to contact"
-    commitment, and proposes a `SEND_MESSAGE` `Action` — never sends it,
-    never requests approval, never completes the commitment."""
-
-    name = "send_message"
+    name = "send_revised_document"
 
     def __init__(self, *, composer: MessageComposer | None = None) -> None:
         self._composer = composer or DeterministicMessageComposer()
 
     def supports(self, commitment: Commitment) -> bool:
-        action = (commitment.action or "").strip().lower()
-        return any(action == v or action.startswith(f"{v} ") for v in _SEND_TYPE_VERBS)
+        return _signals.has_send_verb(commitment.action) and _signals.has_revision_signal(commitment)
 
     def plan(
         self, commitment: Commitment, contact: Contact | None, context_items: list[ContextItem],
@@ -99,9 +96,9 @@ class SendMessagePlanner:
         supporting_ids = [top_document.id] + ([top_message.id] if top_message else [])
         action_plan = ActionPlan.for_action_type(
             ActionType.SEND_MESSAGE,
-            summary=f'Send "{revised_doc.name}" to {contact.name}',
+            summary=f'Send revised "{revised_doc.name}" to {contact.name}',
             rationale=(
-                f"Commitment action \"{commitment.action}\" matches a send-type workflow; "
+                f"Commitment action \"{commitment.action}\" matches a send-a-revision workflow; "
                 f"selected top-ranked document '{top_document.title}'"
                 + (f" and message '{top_message.title}' for feedback" if top_message else "")
                 + " from context retrieval."
@@ -124,3 +121,9 @@ class SendMessagePlanner:
         repos.actions.save(action)
 
         return {"action_plan": action_plan, "document": revised_doc, "changes": changes, "draft": draft, "action": action}
+
+
+# Backward-compatible name: every earlier caller/test refers to this planner as
+# `SendMessagePlanner` (from before "send existing" vs. "send revised" were split
+# into separate planners). Same class, same object identity — not a copy.
+SendMessagePlanner = SendRevisedDocumentPlanner
