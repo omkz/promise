@@ -19,7 +19,7 @@ whether another tenant's resource exists (404, not 403, for cross-workspace
 resource lookups) — see main.py's exception handlers."""
 
 ISSUER = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TESTPOOL"
-AUDIENCE = "test-client-id"
+CLIENT_ID = "test-client-id"
 _signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
@@ -34,13 +34,15 @@ class _FakeJWKSClient:
 
 
 def _token(*, subject: str, exp_delta: int = 3600, scope: str = "commitments.read commitments.write context.read agent.execute") -> str:
+    """A realistic Cognito *access* token: `client_id` + `scope`, no `aud` claim
+    at all (see tests/test_auth_oidc.py for why that distinction matters)."""
     now = int(time.time())
-    claims = {"sub": subject, "iss": ISSUER, "aud": AUDIENCE, "iat": now, "exp": now + exp_delta, "token_use": "access", "scope": scope}
+    claims = {"sub": subject, "iss": ISSUER, "client_id": CLIENT_ID, "iat": now, "exp": now + exp_delta, "token_use": "access", "scope": scope}
     return jwt.encode(claims, _signing_key, algorithm="RS256")
 
 
 def _oidc_provider(**overrides) -> OIDCAuthProvider:
-    defaults = dict(issuer=ISSUER, jwks_client=_FakeJWKSClient(), audience=AUDIENCE, required_scopes=frozenset())
+    defaults = dict(issuer=ISSUER, jwks_client=_FakeJWKSClient(), client_id=CLIENT_ID, required_scopes=frozenset())
     defaults.update(overrides)
     return OIDCAuthProvider(**defaults)
 

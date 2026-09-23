@@ -69,7 +69,7 @@ def get_commitment(
     commitment_id: str, principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
 ) -> Commitment:
     require(principal, Permission.COMMITMENTS_READ)
-    return tools.get_commitment(ctx, workspace_id=principal.workspace_id, commitment_id=commitment_id)
+    return tools.get_commitment(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, commitment_id=commitment_id)
 
 
 @router.get("/{commitment_id}/context")
@@ -93,7 +93,9 @@ def update_commitment(
 ) -> Commitment:
     require(principal, Permission.COMMITMENTS_WRITE)
     fields = {k: v for k, v in body.model_dump().items() if v is not None}
-    return tools.update_commitment(ctx, workspace_id=principal.workspace_id, commitment_id=commitment_id, **fields)
+    return tools.update_commitment(
+        ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, commitment_id=commitment_id, **fields
+    )
 
 
 @router.post("/{commitment_id}/handle")
@@ -113,7 +115,7 @@ def complete_commitment(
     commitment_id: str, principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
 ) -> Commitment:
     require(principal, Permission.COMMITMENTS_WRITE)
-    return tools.complete_commitment(ctx, workspace_id=principal.workspace_id, commitment_id=commitment_id)
+    return tools.complete_commitment(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, commitment_id=commitment_id)
 
 
 @router.post("/{commitment_id}/cancel")
@@ -121,4 +123,4 @@ def cancel_commitment(
     commitment_id: str, principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
 ) -> Commitment:
     require(principal, Permission.COMMITMENTS_WRITE)
-    return tools.cancel_commitment(ctx, workspace_id=principal.workspace_id, commitment_id=commitment_id)
+    return tools.cancel_commitment(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, commitment_id=commitment_id)

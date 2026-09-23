@@ -346,11 +346,23 @@ argument, or `X-User-Id`-style header — identity always comes from
     `DEV_USER_ID`/`DEV_WORKSPACE_ID`. Not production security — isolated behind the same
     interface `OIDCAuthProvider` implements, so nothing above this layer needs to know which
     is active.
-  - `OIDCAuthProvider` (`AUTH_MODE=oidc`): validates a `Bearer` access token against JWKS —
-    signature, issuer, expiration, audience (when configured), `token_use`, and required
-    scopes. Compatible with Amazon Cognito User Pools and any standard OIDC provider. Never
-    decodes a JWT without verifying its signature first, and never falls back to local
-    identity on any failure — every failure raises a specific, classified error (see below).
+  - `OIDCAuthProvider` (`AUTH_MODE=oidc`): validates a `Bearer` token against JWKS —
+    signature, issuer, expiration, `token_use`-correct audience, and required scopes.
+    Compatible with Amazon Cognito User Pools and any standard OIDC provider. Never decodes a
+    JWT without verifying its signature first, and never falls back to local identity on any
+    failure — every failure raises a specific, classified error (see below).
+
+    **Access vs. ID tokens, handled correctly**: a Cognito *access* token has a `client_id`
+    claim and no `aud` claim at all; a Cognito *ID* token has the opposite. Asking PyJWT to
+    verify `audience=<client_id>` on every token — the naive approach — rejects every real
+    Cognito access token outright, since it then requires an `aud` claim access tokens never
+    carry. `OIDCAuthProvider` decodes with `verify_aud=False` and checks the *correct* claim
+    itself based on the token's own `token_use`: `client_id` for an access token (the
+    default, preferred path — "prefer access tokens for API/MCP authorization"), `aud` for an
+    ID token — and ID tokens are rejected outright unless `COGNITO_ALLOW_ID_TOKENS=true`
+    (off by default; they also carry no OAuth `scope`, so a `required_scopes` check that
+    matters will reject one anyway). `COGNITO_REQUIRED_SCOPES`, when set, requires **all**
+    listed scopes to be present (not just one).
 - **Principal resolution** (`packages/app/promise_app/identity.py`): `TokenClaims` alone
   aren't enough to act — `AuthenticatedPrincipal.user_id`/`workspace_id` are resolved, never
   taken from the JWT directly:
@@ -368,6 +380,15 @@ argument, or `X-User-Id`-style header — identity always comes from
   -> REST `403`. A resource in a foreign workspace still `404`s via the existing
   `NotFoundError` path (workspace-scoped repository lookups), never `403` — so a request can't
   distinguish "wrong workspace" from "doesn't exist" by resource id alone.
+- **Resource ownership** (`packages/app/promise_app/tools.py`): workspace membership alone is
+  not enough for a *personal* commitment resource — `get_commitment`, `update_commitment`,
+  `complete_commitment`, `cancel_commitment`, and `handle_commitment` all additionally require
+  `principal.user_id == commitment.user_id` (`WorkspaceAccessError`, 403, otherwise). `Action`/
+  `Approval` carry no owner field of their own, so `decide_approval`/`execute_approved_action`
+  derive ownership transitively through the commitment an action is for; `AgentRun` already
+  has its own `user_id`, so `get_agent_run` checks that directly. Workspace-wide listing
+  (`search_commitments`, `list_actions`, ...) is unchanged — only single-resource
+  reads/mutations are ownership-gated.
 - **MCP**: tools no longer accept `workspace_id`/`user_id`/`actor`/`decided_by` as arguments
   at all (see `services/mcp/promise_mcp/server.py`) — identity comes from
   `Context.headers["authorization"]`, the same Bearer-token surface Alexa+'s MCP
@@ -387,14 +408,16 @@ DEV_USER_ID=usr_dev_default          # AUTH_MODE=local only
 DEV_WORKSPACE_ID=ws_dev_default      # AUTH_MODE=local only
 
 COGNITO_ISSUER=https://cognito-idp.<region>.amazonaws.com/<user-pool-id>   # AUTH_MODE=oidc
-COGNITO_AUDIENCE=<app-client-id>                                          # optional
+COGNITO_CLIENT_ID=<app-client-id>                                         # optional; checked against access tokens' client_id
 COGNITO_JWKS_URL=                                                         # optional; OIDC discovery preferred
-COGNITO_REQUIRED_SCOPES=                                                  # optional, comma-separated
+COGNITO_REQUIRED_SCOPES=                                                  # optional, comma-separated; ALL must be present
+COGNITO_ALLOW_ID_TOKENS=false                                             # off by default -- access tokens preferred
 ```
 
 **Try it**: `uv run pytest tests/test_auth_oidc.py tests/test_identity_resolution.py
-tests/test_rest_auth.py tests/test_mcp_auth.py` — generated RSA keypair + self-signed JWT
-fixtures, no live Cognito or network access required.
+tests/test_rest_auth.py tests/test_mcp_auth.py tests/test_resource_ownership.py` — generated
+RSA keypair + self-signed JWT fixtures shaped like real Cognito access/ID tokens, no live
+Cognito or network access required.
 
 **Known limitations**: subject -> `User` resolution is a linear scan over `query_all("user")`
 (see `identity.py`'s own docstring) — fine for local/demo data, but a real deployment needs a

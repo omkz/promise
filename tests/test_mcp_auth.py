@@ -46,16 +46,18 @@ class _FakeMcpContext:
 
 
 def _token(*, subject: str, exp_delta: int = 3600) -> str:
+    """A realistic Cognito *access* token: `client_id` + `scope`, no `aud` claim
+    at all (see tests/test_auth_oidc.py for why that distinction matters)."""
     now = int(time.time())
     claims = {
-        "sub": subject, "iss": ISSUER, "aud": "test-client-id", "iat": now, "exp": now + exp_delta,
+        "sub": subject, "iss": ISSUER, "client_id": "test-client-id", "iat": now, "exp": now + exp_delta,
         "token_use": "access", "scope": "commitments.read commitments.write context.read agent.execute",
     }
     return jwt.encode(claims, _signing_key, algorithm="RS256")
 
 
 def _oidc_provider() -> OIDCAuthProvider:
-    return OIDCAuthProvider(issuer=ISSUER, jwks_client=_FakeJWKSClient(), audience="test-client-id", required_scopes=frozenset())
+    return OIDCAuthProvider(issuer=ISSUER, jwks_client=_FakeJWKSClient(), client_id="test-client-id", required_scopes=frozenset())
 
 
 def _link_user(ctx, *, workspace_id, subject):

@@ -17,6 +17,26 @@ None`-style swallow, and the token's signature is *always* verified against
 JWKS before any claim in it is trusted (see SECURITY in the Identity &
 Authorization Foundation spec: "Do NOT decode JWTs without signature
 verification").
+
+Cognito access vs. ID tokens (important, and easy to get wrong): a Cognito
+*access* token has a `client_id` claim and NO `aud` claim at all. A Cognito
+*ID* token has the opposite — an `aud` claim (set to the app client id) and
+no OAuth `scope`. Blindly telling PyJWT to verify `audience=<client_id>` on
+every token — the naive approach — rejects every real Cognito access token
+outright, because PyJWT then requires an `aud` claim that access tokens never
+carry. So this provider never asks PyJWT to verify `aud` itself; instead it
+decodes with `verify_aud=False` and checks `client_id`/`aud` itself, against
+the *correct* claim for the token's own `token_use`:
+
+- `token_use=access` (the default, preferred path — "prefer access tokens
+  for API/MCP authorization"): checks `client_id` against the configured
+  `client_id`, when one is configured.
+- `token_use=id`: only accepted when `allow_id_tokens=True` (off by default);
+  checks the standard `aud` claim against `client_id` instead.
+- anything else (or a non-Cognito provider that omits `token_use` entirely):
+  treated as an access token, since that's what a Bearer header conventionally
+  carries — its audience, if configured, is still checked as `client_id` first,
+  falling back to `aud` for OIDC providers that use that claim on access tokens.
 """
 
 
@@ -54,35 +74,39 @@ def discover_jwks_url(issuer: str, *, timeout: float = 5.0) -> str:
 class OIDCAuthProvider:
     """`AUTH_MODE=oidc`: validates a `Bearer` access token per standard JWT
     validation principles — signature (via JWKS), issuer, expiration,
-    audience (when configured), `token_use`, and required scopes. Compatible
-    with Amazon Cognito User Pools and any standard OIDC provider.
+    `token_use`-correct audience/client_id (see module docstring), and
+    required scopes. Compatible with Amazon Cognito User Pools and any
+    standard OIDC provider.
 
     Never falls back to `LocalAuthProvider` on failure — every failure raises
-    a specific, controlled error (see module docstring). Fails closed.
+    a specific, controlled error. Fails closed.
     """
 
     auth_method = "oidc"
 
     def __init__(
-        self, *, issuer: str, jwks_client: JWKSClient, audience: str | None = None,
+        self, *, issuer: str, jwks_client: JWKSClient, client_id: str | None = None, allow_id_tokens: bool = False,
         required_scopes: frozenset[str] = frozenset(), algorithms: tuple[str, ...] = ("RS256",),
-        allowed_token_use: tuple[str, ...] = ("access", "id"),
     ) -> None:
         self._issuer = issuer
         self._jwks_client = jwks_client
-        self._audience = audience
+        self._client_id = client_id
+        self._allow_id_tokens = allow_id_tokens
         self._required_scopes = required_scopes
         self._algorithms = list(algorithms)
-        self._allowed_token_use = allowed_token_use
 
     @classmethod
     def from_config(
-        cls, *, issuer: str, audience: str | None, jwks_url: str | None, required_scopes: frozenset[str] = frozenset(),
+        cls, *, issuer: str, client_id: str | None, jwks_url: str | None, required_scopes: frozenset[str] = frozenset(),
+        allow_id_tokens: bool = False,
     ) -> "OIDCAuthProvider":
         """Production factory: builds a real `jwt.PyJWKClient`, discovering the
         JWKS URL via OIDC discovery when one isn't explicitly configured."""
         resolved_jwks_url = jwks_url or discover_jwks_url(issuer)
-        return cls(issuer=issuer, jwks_client=jwt.PyJWKClient(resolved_jwks_url), audience=audience, required_scopes=required_scopes)
+        return cls(
+            issuer=issuer, jwks_client=jwt.PyJWKClient(resolved_jwks_url), client_id=client_id,
+            required_scopes=required_scopes, allow_id_tokens=allow_id_tokens,
+        )
 
     def authenticate(self, request: AuthRequest) -> TokenClaims:
         token = self._extract_bearer_token(request.authorization_header)
@@ -98,15 +122,16 @@ class OIDCAuthProvider:
                 key=signing_key.key,
                 algorithms=self._algorithms,
                 issuer=self._issuer,
-                audience=self._audience,
-                options={"require": ["exp", "iss", "sub"], "verify_aud": self._audience is not None},
+                # Never verify `aud` here: a Cognito access token has no `aud` claim at
+                # all, and PyJWT would reject every one of them if asked to. Audience is
+                # checked explicitly below, against the claim that's actually correct
+                # for this token's own token_use.
+                options={"require": ["exp", "iss", "sub"], "verify_aud": False},
             )
         except jwt.ExpiredSignatureError as exc:
             raise TokenExpired() from exc
         except jwt.InvalidIssuerError as exc:
             raise InvalidToken(f"unexpected issuer: {exc}") from exc
-        except jwt.InvalidAudienceError as exc:
-            raise InvalidToken(f"unexpected audience: {exc}") from exc
         except jwt.MissingRequiredClaimError as exc:
             raise InvalidToken(f"token missing required claim: {exc}") from exc
         except jwt.PyJWTError as exc:
@@ -115,19 +140,46 @@ class OIDCAuthProvider:
             # payload, so nothing here reads a claim from it.
             raise InvalidToken(f"token validation failed: {exc}") from exc
 
-        token_use = claims.get("token_use")
-        if token_use is not None and token_use not in self._allowed_token_use:
-            raise InvalidToken(f"unexpected token_use: {token_use!r}")
+        self._validate_token_use_and_audience(claims)
 
         scopes = _extract_scopes(claims)
-        if self._required_scopes and not (self._required_scopes & scopes):
-            raise InsufficientScope(f"token missing required scope(s): {sorted(self._required_scopes)}")
+        if not self._required_scopes.issubset(scopes):
+            missing = sorted(self._required_scopes - scopes)
+            raise InsufficientScope(f"token missing required scope(s): {missing}")
 
         subject = claims.get("sub")
         if not subject:
             raise InvalidToken("token missing 'sub' claim")
 
         return TokenClaims(subject=subject, scopes=scopes, auth_method="oidc")
+
+    def _validate_token_use_and_audience(self, claims: dict) -> None:
+        """See the module docstring for why access and ID tokens are checked
+        against different claims (`client_id` vs. `aud`), never both blindly."""
+        token_use = claims.get("token_use")
+
+        if token_use == "id":
+            if not self._allow_id_tokens:
+                raise InvalidToken(
+                    "ID tokens are not accepted for API/MCP authorization here — pass an access token "
+                    "(or configure allow_id_tokens=True to opt in)"
+                )
+            if self._client_id is not None and not _claim_matches(claims.get("aud"), self._client_id):
+                raise InvalidToken("unexpected audience")
+            return
+
+        if token_use is not None and token_use != "access":
+            raise InvalidToken(f"unexpected token_use: {token_use!r}")
+
+        # token_use == "access", or absent entirely (a non-Cognito OIDC access token
+        # conventionally has no token_use claim at all — still treated as an access
+        # token, since that's what a Bearer header carries by convention).
+        if self._client_id is not None:
+            candidate = claims.get("client_id")
+            if candidate is None:
+                candidate = claims.get("aud")  # some non-Cognito access tokens use `aud` instead
+            if not _claim_matches(candidate, self._client_id):
+                raise InvalidToken("unexpected client_id")
 
     @staticmethod
     def _extract_bearer_token(authorization_header: str | None) -> str:
@@ -137,6 +189,12 @@ class OIDCAuthProvider:
         if scheme.lower() != "bearer" or not token.strip():
             raise AuthenticationRequired("Authorization header must be 'Bearer <token>'")
         return token.strip()
+
+
+def _claim_matches(value: object, expected: str) -> bool:
+    if isinstance(value, list):
+        return expected in value
+    return value == expected
 
 
 def _extract_scopes(claims: dict) -> frozenset[str]:

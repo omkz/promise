@@ -90,7 +90,7 @@ def test_unsupported_commitment_fails_the_agent_run_safely_not_silently(ctx):
     with pytest.raises(PlanningError):
         tools.handle_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
 
-    failed = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, commitment_id=commitment.id)
+    failed = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
     assert failed.status.value == "failed"
     # no Action was ever fabricated for this commitment
     assert tools.list_actions(ctx, workspace_id=ctx.default_workspace_id, commitment_id=commitment.id) == []
@@ -182,7 +182,7 @@ def test_planner_does_not_send_or_request_approval_or_complete_the_commitment(se
     # No Approval row exists yet -- only AgentOrchestrator's approval step creates one.
     assert ctx.repos.approvals.list(ctx.default_workspace_id) == []
     # The commitment is untouched by planning -- still whatever create_commitment left it as.
-    refreshed = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, commitment_id=commitment.id)
+    refreshed = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
     assert refreshed.status != CommitmentStatus.COMPLETED
     # No draft was actually sent (LocalIntegrationProvider tracks real sends).
     drafts = ctx.store.query("draft", ctx.default_workspace_id)

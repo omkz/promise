@@ -30,7 +30,7 @@ def get_agent_run(
     agent_run_id: str, principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
 ) -> dict[str, Any]:
     require(principal, Permission.COMMITMENTS_READ)
-    return tools.get_agent_run(ctx, workspace_id=principal.workspace_id, agent_run_id=agent_run_id)
+    return tools.get_agent_run(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, agent_run_id=agent_run_id)
 
 
 @router.get("/actions")

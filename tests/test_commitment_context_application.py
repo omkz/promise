@@ -41,11 +41,11 @@ def test_retrieve_commitment_context_does_not_mutate_the_commitment(seeded_ctx):
     commitment = tools.create_commitment(
         ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, text="I'll call Sam today.",
     )["commitment"]
-    before = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, commitment_id=commitment.id)
+    before = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
 
     tools.retrieve_commitment_context(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
 
-    after = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, commitment_id=commitment.id)
+    after = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
     assert before == after
 
 

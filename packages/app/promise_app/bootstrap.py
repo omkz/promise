@@ -72,9 +72,13 @@ def build_auth_provider() -> AuthProvider:
         required_scopes = frozenset(s.strip() for s in os.getenv("COGNITO_REQUIRED_SCOPES", "").split(",") if s.strip())
         return OIDCAuthProvider.from_config(
             issuer=issuer,
-            audience=os.getenv("COGNITO_AUDIENCE") or os.getenv("COGNITO_CLIENT_ID") or None,
+            client_id=os.getenv("COGNITO_CLIENT_ID") or os.getenv("COGNITO_AUDIENCE") or None,
             jwks_url=os.getenv("COGNITO_JWKS_URL") or None,
             required_scopes=required_scopes,
+            # Off by default: "prefer access tokens for API/MCP authorization" — ID
+            # tokens (which carry no OAuth scope) are only accepted when explicitly
+            # opted into.
+            allow_id_tokens=os.getenv("COGNITO_ALLOW_ID_TOKENS", "false").lower() == "true",
         )
     if mode != "local":
         raise RuntimeError(f"unknown AUTH_MODE {mode!r} (expected 'local' or 'oidc')")

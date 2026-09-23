@@ -55,8 +55,33 @@ def create_commitment(
     return result
 
 
-def get_commitment(ctx: AppContext, *, workspace_id: str, commitment_id: str) -> Commitment:
-    return ctx.repos.commitments.require(workspace_id, commitment_id)
+def _require_owned_commitment(ctx: AppContext, *, workspace_id: str, commitment_id: str, user_id: str) -> Commitment:
+    """A personal commitment resource is user-owned, not just workspace-owned —
+    workspace membership alone is not enough (see the Identity & Authorization
+    spec). Raises `WorkspaceAccessError` (403) whether the commitment belongs
+    to a different user in this same workspace, giving no way to tell that
+    case apart from any other authorization failure by response shape alone."""
+    commitment = ctx.repos.commitments.require(workspace_id, commitment_id)
+    if commitment.user_id != user_id:
+        raise WorkspaceAccessError("commitment", commitment_id)
+    return commitment
+
+
+def _require_owned_action(ctx: AppContext, *, workspace_id: str, action: Action, user_id: str) -> None:
+    """Actions/approvals carry no owner field of their own (see the domain
+    model) — ownership is derived transitively through the commitment an
+    action is for (`Action.commitment_id`), never a new field on Action or
+    Approval. An action with no linked commitment isn't gated this way —
+    "where applicable", per the spec."""
+    if not action.commitment_id:
+        return
+    commitment = ctx.repos.commitments.get(workspace_id, action.commitment_id)
+    if commitment is not None and commitment.user_id != user_id:
+        raise WorkspaceAccessError("action", action.id)
+
+
+def get_commitment(ctx: AppContext, *, workspace_id: str, user_id: str, commitment_id: str) -> Commitment:
+    return _require_owned_commitment(ctx, workspace_id=workspace_id, commitment_id=commitment_id, user_id=user_id)
 
 
 def search_commitments(ctx: AppContext, *, workspace_id: str, query: str = "", status: str | None = None) -> list[Commitment]:
@@ -72,10 +97,11 @@ def search_commitments(ctx: AppContext, *, workspace_id: str, query: str = "", s
 UPDATABLE_COMMITMENT_FIELDS = {"title", "description", "due_at", "priority", "status", "contact_id"}
 
 
-def update_commitment(ctx: AppContext, *, workspace_id: str, commitment_id: str, **fields: Any) -> Commitment:
+def update_commitment(ctx: AppContext, *, workspace_id: str, user_id: str, commitment_id: str, **fields: Any) -> Commitment:
     unknown = set(fields) - UPDATABLE_COMMITMENT_FIELDS
     if unknown:
         raise ValueError(f"cannot update fields: {sorted(unknown)}")
+    _require_owned_commitment(ctx, workspace_id=workspace_id, commitment_id=commitment_id, user_id=user_id)
 
     def mutate(c: Commitment) -> None:
         for key, value in fields.items():
@@ -84,11 +110,13 @@ def update_commitment(ctx: AppContext, *, workspace_id: str, commitment_id: str,
     return ctx.repos.commitments.update(workspace_id, commitment_id, mutate)
 
 
-def complete_commitment(ctx: AppContext, *, workspace_id: str, commitment_id: str) -> Commitment:
+def complete_commitment(ctx: AppContext, *, workspace_id: str, user_id: str, commitment_id: str) -> Commitment:
+    _require_owned_commitment(ctx, workspace_id=workspace_id, commitment_id=commitment_id, user_id=user_id)
     return completion_step.complete_commitment(commitment_id, workspace_id, ctx.agent_repos)
 
 
-def cancel_commitment(ctx: AppContext, *, workspace_id: str, commitment_id: str) -> Commitment:
+def cancel_commitment(ctx: AppContext, *, workspace_id: str, user_id: str, commitment_id: str) -> Commitment:
+    _require_owned_commitment(ctx, workspace_id=workspace_id, commitment_id=commitment_id, user_id=user_id)
     return completion_step.cancel_commitment(commitment_id, workspace_id, ctx.agent_repos)
 
 
@@ -187,6 +215,7 @@ def create_draft(ctx: AppContext, *, workspace_id: str, contact_id: str, documen
 # ---- agent run / approval / execution --------------------------------------
 
 def handle_commitment(ctx: AppContext, *, workspace_id: str, user_id: str, commitment_id: str, trigger: str = "handle_commitment") -> dict[str, Any]:
+    _require_owned_commitment(ctx, workspace_id=workspace_id, commitment_id=commitment_id, user_id=user_id)
     return ctx.orchestrator.run_handle_commitment(workspace_id, user_id, commitment_id, trigger=trigger)
 
 
@@ -197,10 +226,15 @@ def request_approval(ctx: AppContext, *, workspace_id: str, action_id: str) -> A
 def decide_approval(
     ctx: AppContext, *, workspace_id: str, approval_id: str, decision: str, decided_by: str, note: str | None = None
 ) -> Approval:
+    approval = ctx.repos.approvals.require(workspace_id, approval_id)
+    action = ctx.repos.actions.require(workspace_id, approval.action_id)
+    _require_owned_action(ctx, workspace_id=workspace_id, action=action, user_id=decided_by)
     return approval_step.decide_approval(approval_id, workspace_id, ApprovalStatus(decision), decided_by, ctx.agent_repos, note)
 
 
 def execute_approved_action(ctx: AppContext, *, workspace_id: str, action_id: str, actor: str) -> dict[str, Any]:
+    action = ctx.repos.actions.require(workspace_id, action_id)
+    _require_owned_action(ctx, workspace_id=workspace_id, action=action, user_id=actor)
     return ctx.orchestrator.execute_approved_action(workspace_id, action_id, actor=actor)
 
 
@@ -219,8 +253,12 @@ def list_agent_runs(ctx: AppContext, *, workspace_id: str) -> list[AgentRun]:
     return sorted(ctx.repos.agent_runs.list(workspace_id), key=lambda r: r.started_at, reverse=True)
 
 
-def get_agent_run(ctx: AppContext, *, workspace_id: str, agent_run_id: str) -> dict[str, Any]:
+def get_agent_run(ctx: AppContext, *, workspace_id: str, user_id: str, agent_run_id: str) -> dict[str, Any]:
     run = ctx.repos.agent_runs.require(workspace_id, agent_run_id)
+    if run.user_id != user_id:
+        # AgentRun already carries its own user_id (unlike Action/Approval) — no
+        # transitive lookup needed.
+        raise WorkspaceAccessError("agent_run", agent_run_id)
     steps = sorted(
         [s for s in ctx.repos.agent_steps.list(workspace_id) if s.agent_run_id == agent_run_id],
         key=lambda s: s.started_at,

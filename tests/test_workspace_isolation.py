@@ -34,7 +34,7 @@ def test_cannot_fetch_a_commitment_through_the_wrong_workspace(ctx):
     )["commitment"]
 
     with pytest.raises(NotFoundError):
-        tools.get_commitment(ctx, workspace_id=other_ws, commitment_id=commitment.id)
+        tools.get_commitment(ctx, workspace_id=other_ws, user_id=ctx.default_user_id, commitment_id=commitment.id)
 
 
 def test_contacts_and_documents_are_workspace_scoped(seeded_ctx):

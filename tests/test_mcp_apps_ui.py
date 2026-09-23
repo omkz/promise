@@ -136,5 +136,5 @@ async def test_handle_action_in_the_view_calls_the_existing_application_tool(bou
     # Went through the real application layer: the commitment/action/approval trail exists.
     from promise_app import tools
 
-    commitment = tools.get_commitment(bound, workspace_id=bound.default_workspace_id, commitment_id=commitment_id)
+    commitment = tools.get_commitment(bound, workspace_id=bound.default_workspace_id, user_id=bound.default_user_id, commitment_id=commitment_id)
     assert commitment.status.value == "waiting_for_approval"

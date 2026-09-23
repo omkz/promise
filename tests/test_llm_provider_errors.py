@@ -121,7 +121,7 @@ def test_agent_run_fails_clearly_when_bedrock_fails_during_planning(seeded_ctx, 
     with pytest.raises(LLMProviderError):
         tools.handle_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
 
-    failed = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, commitment_id=commitment.id)
+    failed = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
     assert failed.status.value == "failed"
 
 

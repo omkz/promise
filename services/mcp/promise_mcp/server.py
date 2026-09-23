@@ -174,7 +174,9 @@ def update_commitment(commitment_id: str, mcp_ctx: Context | None = None, **fiel
     """Update mutable fields on a commitment (title, description, due_at, priority, status, contact_id)."""
     principal = _authenticate(mcp_ctx)
     require(principal, Permission.COMMITMENTS_WRITE)
-    return _dump(tools.update_commitment(ctx, workspace_id=principal.workspace_id, commitment_id=commitment_id, **fields))
+    return _dump(tools.update_commitment(
+        ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, commitment_id=commitment_id, **fields
+    ))
 
 
 @mcp.tool()
@@ -289,7 +291,7 @@ def complete_commitment(commitment_id: str, mcp_ctx: Context | None = None) -> d
     """Mark a commitment completed directly (when no agent-executed action is involved)."""
     principal = _authenticate(mcp_ctx)
     require(principal, Permission.COMMITMENTS_WRITE)
-    return _dump(tools.complete_commitment(ctx, workspace_id=principal.workspace_id, commitment_id=commitment_id))
+    return _dump(tools.complete_commitment(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, commitment_id=commitment_id))
 
 
 @mcp.custom_route("/health", methods=["GET"])

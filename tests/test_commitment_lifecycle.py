@@ -32,14 +32,14 @@ def test_full_lifecycle_open_to_completed(seeded_ctx):
     assert result["commitment"].status.value == "completed"
     assert result["agent_run"].status.value == "completed"
 
-    fetched = tools.get_commitment(ctx, workspace_id=ws, commitment_id=commitment.id)
+    fetched = tools.get_commitment(ctx, workspace_id=ws, user_id=uid, commitment_id=commitment.id)
     assert fetched.status.value == "completed"
     assert fetched.completed_at is not None
 
 
 def test_manual_cancel(ctx):
     commitment = _extract(ctx)["commitment"]
-    cancelled = tools.cancel_commitment(ctx, workspace_id=ctx.default_workspace_id, commitment_id=commitment.id)
+    cancelled = tools.cancel_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
     assert cancelled.status.value == "cancelled"
     assert cancelled.cancelled_at is not None
 
@@ -47,7 +47,10 @@ def test_manual_cancel(ctx):
 def test_update_commitment_rejects_unknown_fields(ctx):
     commitment = _extract(ctx)["commitment"]
     with pytest.raises(ValueError):
-        tools.update_commitment(ctx, workspace_id=ctx.default_workspace_id, commitment_id=commitment.id, workspace_id_hack="x")
+        tools.update_commitment(
+            ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id,
+            workspace_id_hack="x",
+        )
 
 
 def test_approval_is_required_before_execution(seeded_ctx):

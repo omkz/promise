@@ -12,7 +12,7 @@ def test_agent_run_records_steps_and_audit_trail(seeded_ctx):
     handled = tools.handle_commitment(ctx, workspace_id=ws, user_id=uid, commitment_id=commitment.id)
     run_id = handled["agent_run"].id
 
-    detail = tools.get_agent_run(ctx, workspace_id=ws, agent_run_id=run_id)
+    detail = tools.get_agent_run(ctx, workspace_id=ws, user_id=uid, agent_run_id=run_id)
     step_names = [s.name.value for s in detail["steps"]]
     assert step_names == ["retrieval", "planning", "approval"]
     assert all(s.status.value == "completed" for s in detail["steps"])
@@ -21,7 +21,7 @@ def test_agent_run_records_steps_and_audit_trail(seeded_ctx):
     tools.decide_approval(ctx, workspace_id=ws, approval_id=handled["approval"].id, decision="approved", decided_by=uid)
     tools.execute_approved_action(ctx, workspace_id=ws, action_id=handled["action"].id, actor=uid)
 
-    detail_after = tools.get_agent_run(ctx, workspace_id=ws, agent_run_id=run_id)
+    detail_after = tools.get_agent_run(ctx, workspace_id=ws, user_id=uid, agent_run_id=run_id)
     step_names_after = [s.name.value for s in detail_after["steps"]]
     assert step_names_after == ["retrieval", "planning", "approval", "execution", "completion"]
     assert detail_after["run"].status.value == "completed"
@@ -47,7 +47,7 @@ def test_planning_failure_marks_run_and_commitment_failed(ctx):
     with pytest.raises(PlanningError):
         tools.handle_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
 
-    failed = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, commitment_id=commitment.id)
+    failed = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
     assert failed.status.value == "failed"
 
     runs = tools.list_agent_runs(ctx, workspace_id=ctx.default_workspace_id)
