@@ -139,6 +139,17 @@ def search_commitments(query: str = "", status: str | None = None, workspace_id:
 
 
 @mcp.tool()
+def retrieve_commitment_context(commitment_id: str, limit: int | None = None, workspace_id: str | None = None, user_id: str | None = None) -> dict[str, Any]:
+    """Ranked, explainable documents/messages relevant to completing a commitment.
+    Calls the same `promise_app.tools.retrieve_commitment_context` application
+    service REST uses — no retrieval logic lives in this adapter. Read-only."""
+    return _dump(tools.retrieve_commitment_context(
+        ctx, workspace_id=workspace_id or ctx.default_workspace_id, user_id=user_id or ctx.default_user_id,
+        commitment_id=commitment_id, limit=limit,
+    ))
+
+
+@mcp.tool()
 def search_files(query: str, workspace_id: str | None = None) -> list[dict[str, Any]]:
     """Search workspace documents through the connected integration provider."""
     return _dump(tools.search_files(ctx, workspace_id=workspace_id or ctx.default_workspace_id, query=query))

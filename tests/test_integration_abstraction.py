@@ -21,17 +21,25 @@ class FakeIntegrationProvider:
         self.drafts_created: list[dict[str, Any]] = []
         self.sent: list[str] = []
 
+    def _scoped(self, workspace_id: str, row: dict) -> dict:
+        # A real IntegrationProvider's rows always carry the workspace they belong to
+        # (see promise_domain.models.Document/Message) — echo it here too, since
+        # ContextRetriever's providers defensively drop any row that doesn't.
+        return {**row, "workspace_id": workspace_id}
+
     def search_messages(self, workspace_id: str, query: str) -> list[dict]:
-        return list(self.messages.values())
+        return [self._scoped(workspace_id, m) for m in self.messages.values()]
 
     def get_message(self, workspace_id: str, message_id: str) -> dict | None:
-        return self.messages.get(message_id)
+        row = self.messages.get(message_id)
+        return self._scoped(workspace_id, row) if row else None
 
     def search_files(self, workspace_id: str, query: str) -> list[dict]:
-        return list(self.files.values())
+        return [self._scoped(workspace_id, f) for f in self.files.values()]
 
     def get_file(self, workspace_id: str, file_id: str) -> dict | None:
-        return self.files.get(file_id)
+        row = self.files.get(file_id)
+        return self._scoped(workspace_id, row) if row else None
 
     def create_draft(self, workspace_id: str, *, recipient, subject, body, attachment_file_id=None) -> dict:
         draft = {"id": "draft_fake_1", "recipient": recipient, "subject": subject, "body": body}

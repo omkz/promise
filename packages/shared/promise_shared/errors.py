@@ -54,6 +54,22 @@ class ExtractionProviderError(PromiseError):
         self.retryable = retryable
 
 
+class ContextRetrievalProviderError(PromiseError):
+    """Raised when a context-retrieval search provider (documents, messages, or a
+    future Gmail/Drive/Slack/etc. provider) fails to fetch candidates.
+
+    Never swallowed into a fabricated/empty-but-successful result: the caller
+    (`ContextRetriever`) catches this per-provider, records it, and marks the
+    overall retrieval `PARTIAL` rather than `COMPLETE` — see
+    `promise_agent.context_retrieval.schema.RetrievalStatus`.
+    """
+
+    def __init__(self, provider_name: str, detail: str, *, retryable: bool = True) -> None:
+        super().__init__(f"{provider_name} context search provider failed: {detail}")
+        self.provider_name = provider_name
+        self.retryable = retryable
+
+
 class VerifiedContactRequiredError(PromiseError):
     """Raised when an external send action needs a contact with a verified email
     on file, and none is available. PROMISE never invents a contact email

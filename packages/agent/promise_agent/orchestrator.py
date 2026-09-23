@@ -60,13 +60,13 @@ class AgentOrchestrator:
         self.repos.commitments.update(workspace_id, commitment_id, lambda c: setattr(c, "status", CommitmentStatus.IN_PROGRESS))
 
         try:
-            with self._step(agent_run, AgentStepName.RETRIEVAL, ["integration.search_files", "integration.search_messages"]) as step:
+            with self._step(agent_run, AgentStepName.RETRIEVAL, ["context_retriever.retrieve"]) as step:
                 context = retrieval_step.retrieve_context(commitment, contact, self.repos)
-                step.output_summary = f"{len(context['documents'])} document(s), {len(context['messages'])} message(s)"
+                step.output_summary = f"{len(context['items'])} context item(s) ({context['status'].value})"
 
             with self._step(agent_run, AgentStepName.PLANNING, ["llm.revise_document", "integration.create_draft"]) as step:
                 plan = planning_step.plan_send_revised_document(
-                    commitment, contact, context["documents"], context["messages"], self.repos, agent_run.id
+                    commitment, contact, context["items"], self.repos, agent_run.id
                 )
                 step.output_summary = f"Proposed action {plan['action'].id} ({plan['action'].type.value})"
         except Exception as exc:  # noqa: BLE001

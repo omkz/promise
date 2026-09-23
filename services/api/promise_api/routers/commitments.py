@@ -65,6 +65,17 @@ def get_commitment(commitment_id: str, ws: str = Depends(workspace_id), ctx: App
     return tools.get_commitment(ctx, workspace_id=ws, commitment_id=commitment_id)
 
 
+@router.get("/{commitment_id}/context")
+def get_commitment_context(
+    commitment_id: str, limit: int | None = None, ws: str = Depends(workspace_id), uid: str = Depends(user_id),
+    ctx: AppContext = Depends(get_context),
+) -> dict[str, Any]:
+    """Ranked, explainable documents/messages relevant to completing this commitment
+    (see `promise_app.tools.retrieve_commitment_context`). Read-only, does not mutate
+    the commitment or trigger the agent."""
+    return tools.retrieve_commitment_context(ctx, workspace_id=ws, user_id=uid, commitment_id=commitment_id, limit=limit)
+
+
 @router.patch("/{commitment_id}")
 def update_commitment(
     commitment_id: str, body: UpdateCommitmentBody, ws: str = Depends(workspace_id), ctx: AppContext = Depends(get_context)

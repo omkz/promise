@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from promise_agent import llm
+from promise_agent.context_retrieval import ContextRetriever, build_commitment_query
 from promise_agent.steps import approval as approval_step
 from promise_agent.steps import completion as completion_step
 from promise_agent.steps import extraction as extraction_step
@@ -19,7 +20,7 @@ from promise_domain.models import (
     Document,
     IntegrationAccount,
 )
-from promise_shared.errors import NotFoundError, VerifiedContactRequiredError
+from promise_shared.errors import NotFoundError, VerifiedContactRequiredError, WorkspaceAccessError
 from promise_shared.ids import new_id
 
 from .bootstrap import AppContext
@@ -90,6 +91,36 @@ def complete_commitment(ctx: AppContext, *, workspace_id: str, commitment_id: st
 
 def cancel_commitment(ctx: AppContext, *, workspace_id: str, commitment_id: str) -> Commitment:
     return completion_step.cancel_commitment(commitment_id, workspace_id, ctx.agent_repos)
+
+
+def retrieve_commitment_context(
+    ctx: AppContext, *, workspace_id: str, user_id: str, commitment_id: str, limit: int | None = None
+) -> dict[str, Any]:
+    """Ranked, explainable documents/messages relevant to completing a commitment
+    (`promise_agent.context_retrieval`). Read-only — never mutates the commitment.
+
+    Enforces both workspace scoping (via the workspace-scoped repository lookup)
+    and ownership (`user_id` must match the commitment's own `user_id`) before
+    running retrieval, so this never becomes a way to read another user's or
+    another workspace's context by guessing a commitment id.
+    """
+    commitment = ctx.repos.commitments.require(workspace_id, commitment_id)
+    if commitment.user_id != user_id:
+        raise WorkspaceAccessError("commitment", commitment_id)
+    contact = ctx.repos.contacts.get(workspace_id, commitment.contact_id) if commitment.contact_id else None
+
+    query = build_commitment_query(commitment, contact, user_id=user_id, limit=limit)
+    retriever = ContextRetriever(ctx.integrations.get())
+    outcome = retriever.retrieve(query)
+
+    return {
+        "commitment": commitment,
+        "results": outcome.items,
+        "status": outcome.status,
+        "errors": outcome.errors,
+        "request_id": outcome.request_id,
+        "ranking_strategy": outcome.ranking_strategy,
+    }
 
 
 def list_contacts(ctx: AppContext, *, workspace_id: str) -> list[Contact]:

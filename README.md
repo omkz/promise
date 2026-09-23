@@ -185,6 +185,70 @@ commitment at all) from `persisted` (was a `Commitment` row actually written) �
 ever saved for a suggestion, question, other person's obligation, past action, or a
 detection below the confidence threshold.
 
+## Context Retrieval Engine
+
+Given a commitment ("Send the revised proposal to Andi tomorrow morning"), `packages/agent/
+promise_agent/context_retrieval/` answers "what documents, messages, and other artifacts are
+relevant to completing this?" with ranked, explainable results — independent of FastAPI, MCP,
+Alexa+, and DynamoDB, and callable from the agent, REST, and MCP identically.
+
+```
+Commitment -> ContextQuery -> ContextRetriever -> search providers (documents, messages, ...) -> dedup -> rank -> ContextItem[]
+```
+
+- `schema.py`: `ContextQuery` (workspace/user/commitment/contact/keywords/time window/type
+  filter/limit) and `ContextItem` (id, type, title, small `snippet`, `score` in `[0, 1]`,
+  `match_reasons`, `source` provenance, `metadata`) — the two ends of the contract.
+- `providers.py`: `ContextSearchProvider` — `DocumentSearchProvider`/`MessageSearchProvider`
+  adapt the *existing* `IntegrationProvider` abstraction (`packages/integrations`), so a real
+  Gmail/Google Drive/Slack/Notion/Microsoft 365 provider needs no new retrieval plumbing —
+  only a new `IntegrationProvider` implementation. PostgreSQL full-text and vector/semantic
+  search are future `ContextSearchProvider`s; v1 ships none of them, and no vector database or
+  embeddings were introduced for this milestone.
+- `ranking.py`: `RankingStrategy` — v1's only implementation,
+  `DeterministicLexicalRanker`, is pure keyword/metadata matching (contact match, title match,
+  phrase/token match, recency; document/message type is a deterministic tie-break, not a
+  weighted signal) with fixed weights summing to `1.0`. It never claims semantic relevance —
+  every score is traceable to a `match_reasons` string. A semantic/vector ranker later is a
+  drop-in replacement behind the same `RankingStrategy` protocol.
+- `retriever.py`: `ContextRetriever` fans out to every relevant provider (skipping ones
+  excluded by `ContextQuery.types`), drops any candidate outside the query's workspace as
+  defense in depth (providers already scope themselves; this never trusts that alone),
+  deduplicates an artifact matched by multiple search terms into one item with combined match
+  reasons, applies the time-window filter, ranks, and caps at `limit` (default 5 — this never
+  dumps the full corpus into agent context). If a provider fails, its error is recorded and
+  retrieval continues with what succeeded: `RetrievalOutcome.status` is `partial`, never
+  silently reported as `complete`.
+- `query_builder.py`: `build_commitment_query` derives keywords from a commitment's
+  title/action/description via plain tokenization — no LLM. Deterministic filtering stays
+  separate from LLM reasoning (extraction already did any LLM work, upstream of this).
+
+**Application service**: `promise_app.tools.retrieve_commitment_context(workspace_id, user_id,
+commitment_id)` loads the commitment (workspace-scoped) and checks `commitment.user_id ==
+user_id` before running retrieval, never mutates the commitment, and returns `{"commitment",
+"results", "status", "errors", "request_id", "ranking_strategy"}`. REST: `GET
+/api/commitments/{id}/context`. MCP: `retrieve_commitment_context` tool. Both are thin
+wrappers over the same application service — no retrieval logic in either adapter.
+
+**Agent integration**: the RETRIEVAL step (`steps/retrieval.py`) builds a query from the
+commitment and runs `ContextRetriever` fresh each call (so a swapped `IntegrationProvider`,
+e.g. in tests, is always the one used); the PLANNING step
+(`steps/planning.py::plan_send_revised_document`) now takes a `list[ContextItem]` — never a
+raw string — and calls `get_file`/`get_message` for full content only after picking the
+top-ranked item, per DOCUMENT CONTENT in the spec (`ContextItem.snippet` is deliberately
+small).
+
+**Current limitation**: v1 is deterministic lexical/metadata retrieval (substring and token
+overlap over documents/messages already in the local/demo store), not semantic search — it
+will miss paraphrases and synonyms a vector search would catch. The `ContextSearchProvider`
+and `RankingStrategy` seams exist specifically so semantic/vector retrieval (pgvector,
+OpenSearch, embeddings, ...) can be added later as new implementations of those two
+interfaces, without `ContextRetriever` or anything above it changing.
+
+**Try it**: `uv run pytest tests/test_context_retrieval.py tests/test_commitment_context_application.py`
+covers ranking, filtering, dedup, isolation, and provider-failure behavior in isolation, plus
+the commitment -> REST/MCP/agent integration path using the seeded Andi/Sarah demo data.
+
 ## AWS mode
 
 ```env
@@ -214,9 +278,10 @@ deployment notes.
   changes needed in `packages/agent` or `packages/app`.
 - `IntegrationAccount.secret_ref` is a placeholder pointer; there is no real Secrets Manager
   integration yet, and no OAuth flow.
-- Search is exact-substring only; the interface (`IntegrationProvider.search_files` /
-  `search_messages`) is shaped to support semantic/vector search later without callers
-  changing.
+- Context retrieval (`packages/agent/promise_agent/context_retrieval/`) is v1: deterministic
+  lexical/keyword + metadata ranking, no semantic/vector search yet. The `ContextSearchProvider`
+  and `RankingStrategy` seams are shaped for that to be a later addition without
+  `ContextRetriever` or its callers changing — see the Context Retrieval Engine section above.
 - DynamoDB adapter is a straightforward single-table CRUD implementation; it has not been
   load-tested and doesn't yet use a GSI for `query_all` (admin/maintenance path only).
 - The web UI still has the original single-page demo flow; approvals/activity/connections

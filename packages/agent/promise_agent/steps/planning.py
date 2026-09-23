@@ -9,6 +9,7 @@ from promise_shared.ids import new_id
 
 from .. import llm
 from ..context import AgentRepos
+from ..context_retrieval import ContextItem, ContextItemType
 
 
 class PlanningError(PromiseError):
@@ -18,8 +19,7 @@ class PlanningError(PromiseError):
 def plan_send_revised_document(
     commitment: Commitment,
     contact: Contact | None,
-    documents: list[dict],
-    messages: list[dict],
+    context_items: list[ContextItem],
     repos: AgentRepos,
     agent_run_id: str,
 ) -> dict:
@@ -28,8 +28,15 @@ def plan_send_revised_document(
     Produces a revised Document, a Draft (via the integration provider),
     and a proposed Action of type SEND_MESSAGE — but never sends anything;
     execution only happens after explicit approval.
+
+    `context_items` are the ranked, structured `ContextItem`s from
+    `promise_agent.context_retrieval` (best match first) — never a giant
+    string. Only their `source.source_id` is used to load full content via
+    `get_file`/`get_message`; the items themselves carry only small snippets
+    (see DOCUMENT CONTENT in the Context Retrieval Engine spec).
     """
-    if not documents:
+    document_items = [i for i in context_items if i.type == ContextItemType.DOCUMENT]
+    if not document_items:
         raise PlanningError("No relevant document found for this commitment")
     if contact is None or not contact.email:
         # PROMISE never invents a contact email (e.g. from a first name) or sends to a
@@ -39,8 +46,16 @@ def plan_send_revised_document(
             contact_id=contact.id if contact else None, contact_name=contact.name if contact else None
         )
 
-    source_doc = documents[0]
-    feedback = messages[0]["content"] if messages else "Apply the latest available feedback."
+    source_doc = repos.integration.get_file(commitment.workspace_id, document_items[0].source.source_id)
+    if source_doc is None:
+        raise PlanningError(f"Relevant document '{document_items[0].source.source_id}' could not be loaded")
+
+    message_items = [i for i in context_items if i.type == ContextItemType.MESSAGE]
+    feedback = "Apply the latest available feedback."
+    if message_items:
+        top_message = repos.integration.get_message(commitment.workspace_id, message_items[0].source.source_id)
+        if top_message and top_message.get("content"):
+            feedback = top_message["content"]
 
     revised_text, changes = llm.revise_document(source_doc.get("content_text", ""), feedback)
     revised_doc = Document(
