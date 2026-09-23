@@ -66,7 +66,7 @@ class AgentOrchestrator:
 
             with self._step(agent_run, AgentStepName.PLANNING, ["llm.revise_document", "integration.create_draft"]) as step:
                 plan = planning_step.plan_send_revised_document(
-                    commitment, contact, context["items"], self.repos, agent_run.id
+                    commitment, contact, context_items=context["items"], repos=self.repos, agent_run_id=agent_run.id
                 )
                 step.output_summary = f"Proposed action {plan['action'].id} ({plan['action'].type.value})"
         except Exception as exc:  # noqa: BLE001
