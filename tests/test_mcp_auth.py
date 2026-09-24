@@ -142,3 +142,41 @@ def test_mcp_oidc_mode_never_uses_local_dev_identity(seeded_ctx, monkeypatch):
     with pytest.raises(AuthenticationRequired) as excinfo:
         mcp_server.search_commitments(query="", mcp_ctx=_FakeMcpContext(headers=None))
     assert seeded_ctx.default_user_id not in str(excinfo.value)
+
+
+# ---- list-level isolation: MCP search_commitments is per-principal, not per-workspace --------------
+
+def test_mcp_search_commitments_is_scoped_per_authenticated_user(seeded_ctx, monkeypatch):
+    """Two different users, linked into the same workspace, each capture a commitment
+    over MCP. Neither user's search_commitments call may see the other's commitment,
+    even though both share one workspace-bound AppContext (see tools.search_commitments
+    / Repository.list user_id filter — the same regression covered at the REST layer
+    by tests/test_workspace_isolation.py and tests/test_resource_ownership.py)."""
+    monkeypatch.setattr(mcp_server, "ctx", seeded_ctx)
+    seeded_ctx.auth_provider = _oidc_provider()
+    ws = seeded_ctx.default_workspace_id
+    _link_user(seeded_ctx, workspace_id=ws, subject="cognito|user-a")
+    _link_user(seeded_ctx, workspace_id=ws, subject="cognito|user-b")
+
+    ctx_a = _FakeMcpContext(headers={"authorization": f"Bearer {_token(subject='cognito|user-a')}"})
+    ctx_b = _FakeMcpContext(headers={"authorization": f"Bearer {_token(subject='cognito|user-b')}"})
+
+    mcp_server.create_commitment(text="I'll send Andi the revised proposal tomorrow morning.", mcp_ctx=ctx_a)
+    mcp_server.create_commitment(text="I'll send Priya the revised proposal tomorrow morning.", mcp_ctx=ctx_b)
+
+    rows_a = mcp_server.search_commitments(query="", mcp_ctx=ctx_a)
+    rows_b = mcp_server.search_commitments(query="", mcp_ctx=ctx_b)
+
+    assert len(rows_a) == 1 and "Andi" in rows_a[0]["description"]
+    assert len(rows_b) == 1 and "Priya" in rows_b[0]["description"]
+    assert rows_a[0]["id"] != rows_b[0]["id"]
+
+
+def test_mcp_search_commitments_cannot_be_widened_by_a_user_id_argument():
+    """search_commitments takes no user_id/workspace_id parameter at all -- there is
+    no argument surface a malicious/compromised MCP client could use to ask for
+    someone else's commitments. See test_no_mcp_tool_accepts_workspace_id_or_user_id_as_an_argument
+    above for the parametrized version covering every tool."""
+    params = inspect.signature(mcp_server.search_commitments).parameters
+    assert "user_id" not in params
+    assert "workspace_id" not in params

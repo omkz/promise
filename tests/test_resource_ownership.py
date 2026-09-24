@@ -67,7 +67,7 @@ def test_handle_commitment_cross_user_is_rejected(seeded_ctx):
     with pytest.raises(WorkspaceAccessError):
         tools.handle_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=OTHER, commitment_id=commitment.id)
     # no agent run was ever started for it
-    assert tools.list_agent_runs(ctx, workspace_id=ctx.default_workspace_id) == []
+    assert tools.list_agent_runs(ctx, workspace_id=ctx.default_workspace_id, user_id=OWNER) == []
 
 
 def test_handle_commitment_by_the_owner_still_works(seeded_ctx):
@@ -93,7 +93,7 @@ def test_decide_approval_cross_user_is_rejected(seeded_ctx):
             ctx, workspace_id=ctx.default_workspace_id, approval_id=handled["approval"].id, decision="approved", decided_by=OTHER
         )
     # still pending -- the rejected decision never took effect
-    approval = tools.list_pending_approvals(ctx, workspace_id=ctx.default_workspace_id)
+    approval = tools.list_pending_approvals(ctx, workspace_id=ctx.default_workspace_id, user_id=OWNER)
     assert any(a.id == handled["approval"].id for a in approval)
 
 
@@ -110,7 +110,7 @@ def test_execute_approved_action_cross_user_is_rejected(seeded_ctx):
     with pytest.raises(WorkspaceAccessError):
         tools.execute_approved_action(ctx, workspace_id=ctx.default_workspace_id, action_id=handled["action"].id, actor=OTHER)
 
-    action = tools.list_actions(ctx, workspace_id=ctx.default_workspace_id, commitment_id=commitment.id)[0]
+    action = tools.list_actions(ctx, workspace_id=ctx.default_workspace_id, user_id=OWNER, commitment_id=commitment.id)[0]
     assert action.status.value != "executed"
 
 
@@ -125,6 +125,28 @@ def test_owner_can_still_decide_and_execute_their_own_action(seeded_ctx):
     )
     result = tools.execute_approved_action(ctx, workspace_id=ctx.default_workspace_id, action_id=handled["action"].id, actor=OWNER)
     assert result["action"].status.value == "executed"
+
+
+def test_request_approval_cross_user_is_rejected(seeded_ctx):
+    ctx = seeded_ctx
+    commitment = tools.create_commitment(
+        ctx, workspace_id=ctx.default_workspace_id, user_id=OWNER, text="I'll send Andi the revised proposal tomorrow morning."
+    )["commitment"]
+    handled = tools.handle_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=OWNER, commitment_id=commitment.id)
+
+    with pytest.raises(WorkspaceAccessError):
+        tools.request_approval(ctx, workspace_id=ctx.default_workspace_id, user_id=OTHER, action_id=handled["action"].id)
+
+
+def test_owner_can_request_approval_for_their_own_action(seeded_ctx):
+    ctx = seeded_ctx
+    commitment = tools.create_commitment(
+        ctx, workspace_id=ctx.default_workspace_id, user_id=OWNER, text="I'll send Andi the revised proposal tomorrow morning."
+    )["commitment"]
+    handled = tools.handle_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=OWNER, commitment_id=commitment.id)
+
+    approval = tools.request_approval(ctx, workspace_id=ctx.default_workspace_id, user_id=OWNER, action_id=handled["action"].id)
+    assert approval.status.value == "pending"
 
 
 # ---- agent runs (own user_id field, no transitive lookup needed) ---------------------------------
@@ -149,6 +171,25 @@ def test_get_agent_run_by_the_owner_still_works(seeded_ctx):
 
     detail = tools.get_agent_run(ctx, workspace_id=ctx.default_workspace_id, user_id=OWNER, agent_run_id=handled["agent_run"].id)
     assert detail["run"].id == handled["agent_run"].id
+
+
+# ---- list-level isolation: search_commitments is user-scoped, not just workspace-scoped ------------
+
+def test_search_commitments_is_scoped_per_user_within_the_same_workspace(ctx):
+    """Regression: two users in the same workspace must each see only their own
+    commitments from search_commitments -- workspace membership alone must never
+    be enough to list someone else's personal commitments (see item 1/7 of the
+    list-level authorization fix; promise_app.tools.search_commitments /
+    Repository.list(workspace_id, user_id=...))."""
+    ws = ctx.default_workspace_id
+    a1 = tools.create_commitment(ctx, workspace_id=ws, user_id=OWNER, text="I'll send Andi the revised proposal tomorrow morning.")["commitment"]
+    b1 = tools.create_commitment(ctx, workspace_id=ws, user_id=OTHER, text="I'll call Sam today.")["commitment"]
+
+    a_rows = tools.search_commitments(ctx, workspace_id=ws, user_id=OWNER)
+    b_rows = tools.search_commitments(ctx, workspace_id=ws, user_id=OTHER)
+
+    assert [c.id for c in a_rows] == [a1.id]
+    assert [c.id for c in b_rows] == [b1.id]
 
 
 # ---- REST level: cross-user is 403 ----------------------------------------------------------------

@@ -15,7 +15,7 @@ def _create(ctx, text, **kwargs):
 # ---- integration test from the Commitment Detection Engine spec -------------------------------
 
 def test_integration_send_revised_proposal_tomorrow_morning(ctx):
-    before = len(tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id))
+    before = len(tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id))
 
     result = _create(ctx, "I'll send Andi the revised proposal tomorrow morning.")
 
@@ -30,14 +30,14 @@ def test_integration_send_revised_proposal_tomorrow_morning(ctx):
     assert commitment.due_at is not None
     assert source.excerpt == "I'll send Andi the revised proposal tomorrow morning."
 
-    after = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id)
+    after = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id)
     assert len(after) == before + 1
 
 
 # ---- non-commitments never create a Commitment row ---------------------------------------------
 
 def test_non_commitment_is_not_persisted(ctx):
-    before = len(tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id))
+    before = len(tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id))
 
     result = _create(ctx, "Can you send Andi the proposal?")
 
@@ -46,7 +46,7 @@ def test_non_commitment_is_not_persisted(ctx):
     assert result["commitment"] is None
     assert "reason" in result and result["reason"]
 
-    after = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id)
+    after = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id)
     assert len(after) == before
 
 
@@ -65,7 +65,7 @@ def test_past_action_is_not_persisted(ctx):
 # ---- confidence threshold / needs_confirmation --------------------------------------------------
 
 def test_low_confidence_detection_needs_confirmation_and_is_not_persisted(ctx):
-    before = len(tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id))
+    before = len(tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id))
 
     result = _create(ctx, "Review the contract next week.")
 
@@ -75,7 +75,7 @@ def test_low_confidence_detection_needs_confirmation_and_is_not_persisted(ctx):
     assert result["commitment"] is None
     assert "message" in result and "Capture it?" in result["message"]
 
-    after = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id)
+    after = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id)
     assert len(after) == before
 
 
@@ -105,7 +105,7 @@ def test_duplicate_commitment_is_not_created_twice(ctx):
     assert first["commitment"].id == second["commitment"].id
     assert second["duplicate"] is True
 
-    rows = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id)
+    rows = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id)
     assert len(rows) == 1
 
 
@@ -114,7 +114,7 @@ def test_different_due_dates_are_not_treated_as_duplicates(ctx):
     second = _create(ctx, "I'll send Andi the revised proposal next week.")
 
     assert first["commitment"].id != second["commitment"].id
-    rows = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id)
+    rows = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id)
     assert len(rows) == 2
 
 

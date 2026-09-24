@@ -386,9 +386,30 @@ argument, or `X-User-Id`-style header — identity always comes from
   `principal.user_id == commitment.user_id` (`WorkspaceAccessError`, 403, otherwise). `Action`/
   `Approval` carry no owner field of their own, so `decide_approval`/`execute_approved_action`
   derive ownership transitively through the commitment an action is for; `AgentRun` already
-  has its own `user_id`, so `get_agent_run` checks that directly. Workspace-wide listing
-  (`search_commitments`, `list_actions`, ...) is unchanged — only single-resource
-  reads/mutations are ownership-gated.
+  has its own `user_id`, so `get_agent_run` checks that directly. `request_approval` (the
+  manual, out-of-band MCP tool — distinct from the orchestrator's own internal call into the
+  same approval step during `handle_commitment`, already gated by that function's own check)
+  applies the identical transitive-ownership check before touching the target action.
+  `IntegrationAccount` carries its own `user_id` (same shape as `Commitment`), so
+  `disconnect_integration_account` requires `principal.user_id == account.user_id` directly.
+- **List-level isolation** (same file): workspace membership is *also* not enough to **list**
+  another user's personal resources — a leak the single-resource checks above didn't close.
+  `search_commitments` is scoped by both `workspace_id` and `user_id`; the filter happens in
+  `Repository.list(workspace_id, user_id=...)` itself (a `**filters` kwarg applied against the
+  already workspace-scoped store query — see `packages/domain/promise_domain/repository.py`),
+  never by loading every workspace commitment and filtering in the router. `list_integration_accounts`
+  uses the same `Repository.list(workspace_id, user_id=...)` seam for `IntegrationAccount`.
+  `list_actions` and
+  `list_pending_approvals` derive the caller's owned commitment/action ids with one bounded
+  `Repository.list` join each (`_owned_commitment_ids`/`_owned_action_ids` — not N+1) and narrow
+  to those; `list_actions(commitment_id=...)` additionally rejects an unowned commitment outright
+  (`WorkspaceAccessError`), matching `get_commitment`'s single-resource behavior. `list_agent_runs`
+  filters on `AgentRun.user_id` directly. `list_audit_events` stays workspace-scoped, deliberately:
+  `AuditEvent.actor` can be a real user or `"system"`/`"agent"`, and a single event's
+  `entity_type` spans commitments/actions/approvals with different owners — there's no one
+  consistent "owner" to filter an audit log by; it's a workspace-level compliance log, not a
+  personal resource (see that function's docstring for the full reasoning). No `list_drafts`
+  application service exists yet — `Draft` has no owner field and nothing lists it today.
 - **MCP**: tools no longer accept `workspace_id`/`user_id`/`actor`/`decided_by` as arguments
   at all (see `services/mcp/promise_mcp/server.py`) — identity comes from
   `Context.headers["authorization"]`, the same Bearer-token surface Alexa+'s MCP

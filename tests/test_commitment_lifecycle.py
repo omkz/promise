@@ -71,7 +71,7 @@ def test_rejecting_an_approval_blocks_execution(seeded_ctx):
     handled = tools.handle_commitment(ctx, workspace_id=ws, user_id=uid, commitment_id=commitment.id)
 
     tools.decide_approval(ctx, workspace_id=ws, approval_id=handled["approval"].id, decision="rejected", decided_by=uid)
-    action = tools.list_actions(ctx, workspace_id=ws, commitment_id=commitment.id)[0]
+    action = tools.list_actions(ctx, workspace_id=ws, user_id=uid, commitment_id=commitment.id)[0]
     assert action.status.value == "rejected"
 
     with pytest.raises(ApprovalRequiredError):

@@ -42,7 +42,7 @@ def list_commitments(
     ctx: AppContext = Depends(get_context),
 ) -> list[Commitment]:
     require(principal, Permission.COMMITMENTS_READ)
-    return tools.search_commitments(ctx, workspace_id=principal.workspace_id, query=query, status=status)
+    return tools.search_commitments(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, query=query, status=status)
 
 
 @router.post("")

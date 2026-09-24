@@ -93,7 +93,7 @@ def test_unsupported_commitment_fails_the_agent_run_safely_not_silently(ctx):
     failed = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
     assert failed.status.value == "failed"
     # no Action was ever fabricated for this commitment
-    assert tools.list_actions(ctx, workspace_id=ctx.default_workspace_id, commitment_id=commitment.id) == []
+    assert tools.list_actions(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id) == []
 
 
 # ---- 3 / 5 / 7. supported revision workflow, ContextItem[] consumption, proposed Action ----------

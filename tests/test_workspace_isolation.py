@@ -20,8 +20,8 @@ def test_commitments_do_not_leak_across_workspaces(ctx):
     tools.create_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, text="I'll call Sam today.")
     tools.create_commitment(ctx, workspace_id=other_ws, user_id="usr_other", text="I'll email Priya tomorrow.")
 
-    default_rows = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id)
-    other_rows = tools.search_commitments(ctx, workspace_id=other_ws)
+    default_rows = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id)
+    other_rows = tools.search_commitments(ctx, workspace_id=other_ws, user_id="usr_other")
 
     assert len(default_rows) == 1 and "Sam" in default_rows[0].description
     assert len(other_rows) == 1 and "Priya" in other_rows[0].description

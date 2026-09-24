@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar
 
 from promise_shared.clock import iso_now
 from promise_shared.errors import ConflictError, NotFoundError
@@ -36,11 +36,27 @@ class Repository(Generic[T]):
             raise NotFoundError(self._entity, item_id)
         return item
 
-    def list(self, workspace_id: str, *, include_deleted: bool = False) -> list[T]:
+    def list(self, workspace_id: str, *, include_deleted: bool = False, **filters: Any) -> list[T]:
+        """`filters` are exact-match field filters (e.g. `user_id="usr_123"`),
+        applied after the workspace-scoped store query.
+
+        The `EntityStore` backends (local JSON, DynamoDB single-table) only
+        support querying by workspace partition key — there's no secondary
+        index to push a `user_id` filter down to, and adding one (e.g. a
+        DynamoDB GSI) is a real infrastructure change, not something to sneak
+        in here. This is still the *correct* seam for it, though: the
+        repository is the one place every caller goes through, so an
+        unauthorized row is never handed back to any of them — a future GSI
+        would replace the Python-side filter below without any caller
+        changing. Never a substitute for a transport layer (e.g. FastAPI
+        router) doing its own after-the-fact filtering.
+        """
         rows = self._store.query(self._entity, workspace_id)
         items = [self._model.model_validate(r) for r in rows]
         if not include_deleted and "deleted_at" in self._model.model_fields:
             items = [i for i in items if getattr(i, "deleted_at", None) is None]
+        for field, value in filters.items():
+            items = [i for i in items if getattr(i, field, None) == value]
         return items
 
     def update(

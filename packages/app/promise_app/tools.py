@@ -67,6 +67,21 @@ def _require_owned_commitment(ctx: AppContext, *, workspace_id: str, commitment_
     return commitment
 
 
+def _owned_commitment_ids(ctx: AppContext, *, workspace_id: str, user_id: str) -> set[str]:
+    """The join `list_actions`/`list_pending_approvals` need to scope personal
+    resources that carry no owner field of their own — one `list` call, never
+    a per-row lookup, so this stays a bounded join, not N+1."""
+    return {c.id for c in ctx.repos.commitments.list(workspace_id, user_id=user_id)}
+
+
+def _owned_action_ids(ctx: AppContext, *, workspace_id: str, user_id: str) -> set[str]:
+    owned_commitment_ids = _owned_commitment_ids(ctx, workspace_id=workspace_id, user_id=user_id)
+    return {
+        a.id for a in ctx.repos.actions.list(workspace_id)
+        if a.commitment_id is None or a.commitment_id in owned_commitment_ids
+    }
+
+
 def _require_owned_action(ctx: AppContext, *, workspace_id: str, action: Action, user_id: str) -> None:
     """Actions/approvals carry no owner field of their own (see the domain
     model) — ownership is derived transitively through the commitment an
@@ -84,8 +99,15 @@ def get_commitment(ctx: AppContext, *, workspace_id: str, user_id: str, commitme
     return _require_owned_commitment(ctx, workspace_id=workspace_id, commitment_id=commitment_id, user_id=user_id)
 
 
-def search_commitments(ctx: AppContext, *, workspace_id: str, query: str = "", status: str | None = None) -> list[Commitment]:
-    rows = ctx.repos.commitments.list(workspace_id)
+def search_commitments(
+    ctx: AppContext, *, workspace_id: str, user_id: str, query: str = "", status: str | None = None
+) -> list[Commitment]:
+    """Workspace AND user scoped: a commitment is a personal resource (see
+    `_require_owned_commitment`), so listing must never hand back another
+    user's commitments just because they're in the same workspace. The
+    `user_id` filter happens in `Repository.list` itself, not here and not in
+    any transport layer — see that method's docstring."""
+    rows = ctx.repos.commitments.list(workspace_id, user_id=user_id)
     if status:
         rows = [r for r in rows if r.status.value == status]
     if query:
@@ -219,7 +241,15 @@ def handle_commitment(ctx: AppContext, *, workspace_id: str, user_id: str, commi
     return ctx.orchestrator.run_handle_commitment(workspace_id, user_id, commitment_id, trigger=trigger)
 
 
-def request_approval(ctx: AppContext, *, workspace_id: str, action_id: str) -> Approval:
+def request_approval(ctx: AppContext, *, workspace_id: str, user_id: str, action_id: str) -> Approval:
+    """Manual out-of-band approval request (distinct from the orchestrator's own
+    call into `approval_step.request_approval` during `handle_commitment`, which
+    is already gated by that function's own `_require_owned_commitment` check).
+    Same ownership rule as `decide_approval`/`execute_approved_action`: `Action`
+    carries no owner field of its own, so ownership is derived transitively
+    through the commitment the action is for."""
+    action = ctx.repos.actions.require(workspace_id, action_id)
+    _require_owned_action(ctx, workspace_id=workspace_id, action=action, user_id=user_id)
     return approval_step.request_approval(action_id, workspace_id, ctx.agent_repos)
 
 
@@ -238,19 +268,39 @@ def execute_approved_action(ctx: AppContext, *, workspace_id: str, action_id: st
     return ctx.orchestrator.execute_approved_action(workspace_id, action_id, actor=actor)
 
 
-def list_pending_approvals(ctx: AppContext, *, workspace_id: str) -> list[Approval]:
-    return [a for a in ctx.repos.approvals.list(workspace_id) if a.status == ApprovalStatus.PENDING]
+def list_pending_approvals(ctx: AppContext, *, workspace_id: str, user_id: str) -> list[Approval]:
+    """`Approval` has no owner field of its own (see `_require_owned_action`) —
+    scoped transitively through the action's commitment, same as the
+    single-resource `decide_approval` check, so listing and acting agree on
+    who can see what."""
+    owned_action_ids = _owned_action_ids(ctx, workspace_id=workspace_id, user_id=user_id)
+    return [
+        a for a in ctx.repos.approvals.list(workspace_id)
+        if a.status == ApprovalStatus.PENDING and a.action_id in owned_action_ids
+    ]
 
 
-def list_actions(ctx: AppContext, *, workspace_id: str, commitment_id: str | None = None) -> list[Action]:
-    rows = ctx.repos.actions.list(workspace_id)
+def list_actions(ctx: AppContext, *, workspace_id: str, user_id: str, commitment_id: str | None = None) -> list[Action]:
+    """When `commitment_id` is given, this is effectively a single-resource
+    lookup — an unowned commitment_id is rejected outright (`WorkspaceAccessError`,
+    same as `get_commitment`), never silently returned as an empty list. With no
+    `commitment_id`, this is a list operation: it's narrowed to the caller's own
+    commitments' actions, not rejected."""
     if commitment_id:
-        rows = [r for r in rows if r.commitment_id == commitment_id]
-    return rows
+        _require_owned_commitment(ctx, workspace_id=workspace_id, commitment_id=commitment_id, user_id=user_id)
+        return [a for a in ctx.repos.actions.list(workspace_id) if a.commitment_id == commitment_id]
+
+    owned_commitment_ids = _owned_commitment_ids(ctx, workspace_id=workspace_id, user_id=user_id)
+    return [
+        a for a in ctx.repos.actions.list(workspace_id)
+        if a.commitment_id is None or a.commitment_id in owned_commitment_ids
+    ]
 
 
-def list_agent_runs(ctx: AppContext, *, workspace_id: str) -> list[AgentRun]:
-    return sorted(ctx.repos.agent_runs.list(workspace_id), key=lambda r: r.started_at, reverse=True)
+def list_agent_runs(ctx: AppContext, *, workspace_id: str, user_id: str) -> list[AgentRun]:
+    """`AgentRun` already carries its own `user_id` (unlike Action/Approval) —
+    no transitive lookup needed, same field `get_agent_run` checks."""
+    return sorted(ctx.repos.agent_runs.list(workspace_id, user_id=user_id), key=lambda r: r.started_at, reverse=True)
 
 
 def get_agent_run(ctx: AppContext, *, workspace_id: str, user_id: str, agent_run_id: str) -> dict[str, Any]:
@@ -267,6 +317,14 @@ def get_agent_run(ctx: AppContext, *, workspace_id: str, user_id: str, agent_run
 
 
 def list_audit_events(ctx: AppContext, *, workspace_id: str) -> list[AuditEvent]:
+    """Deliberately workspace-scoped, not user-filtered — not an oversight.
+    `AuditEvent.actor` can be a real user_id OR `"system"`/`"agent"` for
+    automated steps, and a single event's `entity_type` spans commitments,
+    actions, approvals, etc., each with different ownership; there's no one
+    consistent "owner" to filter by. It's a workspace-level compliance/
+    observability log — who did what, when, across the whole workspace — the
+    same shape a real product's audit trail has, not a personal resource. See
+    the README's Identity & Authorization section for the full reasoning."""
     return sorted(ctx.repos.audit_events.list(workspace_id), key=lambda e: e.created_at, reverse=True)
 
 
@@ -290,11 +348,22 @@ def connect_integration_account(
     return account
 
 
-def list_integration_accounts(ctx: AppContext, *, workspace_id: str) -> list[IntegrationAccount]:
-    return ctx.repos.integration_accounts.list(workspace_id)
+def list_integration_accounts(ctx: AppContext, *, workspace_id: str, user_id: str) -> list[IntegrationAccount]:
+    """User-owned resource (`IntegrationAccount.user_id`, same as Commitment) —
+    scoped by both workspace_id and user_id in `Repository.list` itself, not by
+    loading every workspace account and filtering here or in the router."""
+    return ctx.repos.integration_accounts.list(workspace_id, user_id=user_id)
 
 
-def disconnect_integration_account(ctx: AppContext, *, workspace_id: str, account_id: str) -> IntegrationAccount:
+def _require_owned_integration_account(ctx: AppContext, *, workspace_id: str, account_id: str, user_id: str) -> IntegrationAccount:
+    account = ctx.repos.integration_accounts.require(workspace_id, account_id)
+    if account.user_id != user_id:
+        raise WorkspaceAccessError("integration_account", account_id)
+    return account
+
+
+def disconnect_integration_account(ctx: AppContext, *, workspace_id: str, user_id: str, account_id: str) -> IntegrationAccount:
+    _require_owned_integration_account(ctx, workspace_id=workspace_id, account_id=account_id, user_id=user_id)
     return ctx.repos.integration_accounts.update(
         workspace_id, account_id, lambda a: setattr(a, "status", IntegrationStatus.DISCONNECTED)
     )

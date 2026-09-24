@@ -22,7 +22,7 @@ class DecideApprovalBody(BaseModel):
 @router.get("/agent-runs")
 def list_agent_runs(principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)) -> list[AgentRun]:
     require(principal, Permission.COMMITMENTS_READ)
-    return tools.list_agent_runs(ctx, workspace_id=principal.workspace_id)
+    return tools.list_agent_runs(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id)
 
 
 @router.get("/agent-runs/{agent_run_id}")
@@ -39,7 +39,7 @@ def list_actions(
     ctx: AppContext = Depends(get_context),
 ) -> list[Action]:
     require(principal, Permission.COMMITMENTS_READ)
-    return tools.list_actions(ctx, workspace_id=principal.workspace_id, commitment_id=commitment_id)
+    return tools.list_actions(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, commitment_id=commitment_id)
 
 
 @router.post("/actions/{action_id}/execute")
@@ -55,7 +55,7 @@ def list_pending_approvals(
     principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
 ) -> list[Approval]:
     require(principal, Permission.COMMITMENTS_READ)
-    return tools.list_pending_approvals(ctx, workspace_id=principal.workspace_id)
+    return tools.list_pending_approvals(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id)
 
 
 @router.post("/approvals/{approval_id}/decide")

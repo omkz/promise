@@ -171,7 +171,7 @@ def test_retrieval_to_context_items_to_planning_to_proposed_action(seeded_ctx):
     assert stored_doc.metadata.get("agent_generated") is True
 
     # 4. Preserve approval flow
-    approval = tools.request_approval(ctx, workspace_id=ws, action_id=action.id)
+    approval = tools.request_approval(ctx, workspace_id=ws, user_id=uid, action_id=action.id)
     assert approval.status.value == "pending"
 
     action_after_request = ctx.repos.actions.require(ws, action.id)

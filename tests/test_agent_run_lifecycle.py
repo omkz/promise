@@ -50,5 +50,5 @@ def test_planning_failure_marks_run_and_commitment_failed(ctx):
     failed = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
     assert failed.status.value == "failed"
 
-    runs = tools.list_agent_runs(ctx, workspace_id=ctx.default_workspace_id)
+    runs = tools.list_agent_runs(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id)
     assert runs[0].status.value == "failed"

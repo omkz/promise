@@ -23,7 +23,7 @@ def list_integrations(
     principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
 ) -> list[IntegrationAccount]:
     require(principal, Permission.INTEGRATIONS_MANAGE)
-    return tools.list_integration_accounts(ctx, workspace_id=principal.workspace_id)
+    return tools.list_integration_accounts(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id)
 
 
 @router.post("", status_code=201)
@@ -42,4 +42,6 @@ def disconnect_integration(
     account_id: str, principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
 ) -> IntegrationAccount:
     require(principal, Permission.INTEGRATIONS_MANAGE)
-    return tools.disconnect_integration_account(ctx, workspace_id=principal.workspace_id, account_id=account_id)
+    return tools.disconnect_integration_account(
+        ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, account_id=account_id
+    )

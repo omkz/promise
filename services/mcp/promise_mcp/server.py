@@ -181,10 +181,12 @@ def update_commitment(commitment_id: str, mcp_ctx: Context | None = None, **fiel
 
 @mcp.tool()
 def search_commitments(query: str = "", status: str | None = None, mcp_ctx: Context | None = None) -> list[dict[str, Any]]:
-    """Search this workspace's commitments by free-text query and optional status."""
+    """Search the authenticated principal's own commitments by free-text query and
+    optional status — scoped to the calling user, not the whole workspace (a
+    commitment is a personal resource; see `promise_app.tools.search_commitments`)."""
     principal = _authenticate(mcp_ctx)
     require(principal, Permission.COMMITMENTS_READ)
-    return _dump(tools.search_commitments(ctx, workspace_id=principal.workspace_id, query=query, status=status))
+    return _dump(tools.search_commitments(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, query=query, status=status))
 
 
 @mcp.tool()
@@ -263,7 +265,7 @@ def request_approval(action_id: str, mcp_ctx: Context | None = None) -> dict[str
     """Explicitly request approval for a proposed action. Approval is never inferred from silence."""
     principal = _authenticate(mcp_ctx)
     require(principal, Permission.ACTIONS_APPROVE)
-    return _dump(tools.request_approval(ctx, workspace_id=principal.workspace_id, action_id=action_id))
+    return _dump(tools.request_approval(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, action_id=action_id))
 
 
 @mcp.tool()
