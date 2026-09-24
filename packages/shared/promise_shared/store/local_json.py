@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from threading import RLock
 
+from .index_keys import USER_OWNED_ENTITIES, USER_OWNED_INDEX, user_owned_index_keys
+
 
 class LocalJsonEntityStore:
     """File-backed entity store for local development and tests.
@@ -60,6 +62,32 @@ class LocalJsonEntityStore:
 
     def query_all(self, entity: str) -> list[dict]:
         return list(self._read().get(entity, []))
+
+    def query_index(self, index_name: str, partition_key: str, *, sort_key_prefix: str | None = None) -> list[dict]:
+        """In-memory stand-in for `DynamoEntityStore.query_index`: derives the same
+        GSI1PK/GSI1SK every row would get in DynamoDB (`index_keys.
+        user_owned_index_keys`) and filters/sorts by them, rather than performing
+        a real Query -- correct for local dev/test data volumes, not a substitute
+        for the real Query semantics at production scale."""
+        if index_name != USER_OWNED_INDEX:
+            raise ValueError(f"unknown index {index_name!r}")
+        data = self._read()
+        matches: list[tuple[str, dict]] = []
+        for entity, rows in data.items():
+            if entity not in USER_OWNED_ENTITIES:
+                continue
+            for row in rows:
+                user_id = row.get("user_id")
+                if not user_id:
+                    continue
+                gsi_pk, gsi_sk = user_owned_index_keys(entity, row["workspace_id"], user_id, row.get("created_at", ""), row["id"])
+                if gsi_pk != partition_key:
+                    continue
+                if sort_key_prefix and not gsi_sk.startswith(sort_key_prefix):
+                    continue
+                matches.append((gsi_sk, row))
+        matches.sort(key=lambda pair: pair[0])
+        return [row for _, row in matches]
 
     def delete(self, entity: str, workspace_id: str, item_id: str) -> None:
         with self._lock:

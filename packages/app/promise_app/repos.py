@@ -21,7 +21,7 @@ from promise_domain.models import (
     WorkspaceMembership,
 )
 from promise_domain.repository import Repository
-from promise_shared.store import EntityStore
+from promise_shared.store import USER_OWNED_INDEX, EntityStore
 
 
 class WorkspaceRepository:
@@ -77,12 +77,12 @@ def build_repo_set(store: EntityStore) -> RepoSet:
         contacts=Repository(store, "contact", Contact),
         documents=Repository(store, "document", Document),
         messages=Repository(store, "message", Message),
-        commitments=Repository(store, "commitment", Commitment),
+        commitments=Repository(store, "commitment", Commitment, user_index=USER_OWNED_INDEX),
         sources=Repository(store, "commitment_source", CommitmentSource),
         actions=Repository(store, "action", Action),
         drafts=Repository(store, "draft", Draft),
         approvals=Repository(store, "approval", Approval),
-        integration_accounts=Repository(store, "integration_account", IntegrationAccount),
+        integration_accounts=Repository(store, "integration_account", IntegrationAccount, user_index=USER_OWNED_INDEX),
         agent_runs=Repository(store, "agent_run", AgentRun),
         agent_steps=Repository(store, "agent_step", AgentStep),
         audit_events=Repository(store, "audit_event", AuditEvent),

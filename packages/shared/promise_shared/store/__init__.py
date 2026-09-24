@@ -4,6 +4,7 @@ import os
 from typing import Protocol
 
 from .dynamodb import DynamoEntityStore
+from .index_keys import USER_OWNED_ENTITIES, USER_OWNED_INDEX
 from .local_json import LocalJsonEntityStore
 
 
@@ -26,6 +27,13 @@ class EntityStore(Protocol):
         """Admin/maintenance use only (e.g. cross-workspace jobs). Never expose to tenants."""
         ...
 
+    def query_index(self, index_name: str, partition_key: str, *, sort_key_prefix: str | None = None) -> list[dict]:
+        """Query a named secondary index by partition key, optionally narrowed by a
+        sort-key `begins_with` prefix. Backs `Repository.list_user_owned` -- an
+        implementation must never fall back to a full-table Scan here. See
+        `store/index_keys.py` for the one GSI this currently supports."""
+        ...
+
     def delete(self, entity: str, workspace_id: str, item_id: str) -> None: ...
 
 
@@ -39,4 +47,7 @@ def build_store() -> EntityStore:
     return LocalJsonEntityStore(os.getenv("LOCAL_DATA_DIR", "./data"))
 
 
-__all__ = ["EntityStore", "build_store", "DynamoEntityStore", "LocalJsonEntityStore"]
+__all__ = [
+    "EntityStore", "build_store", "DynamoEntityStore", "LocalJsonEntityStore",
+    "USER_OWNED_INDEX", "USER_OWNED_ENTITIES",
+]

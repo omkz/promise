@@ -69,9 +69,10 @@ def _require_owned_commitment(ctx: AppContext, *, workspace_id: str, commitment_
 
 def _owned_commitment_ids(ctx: AppContext, *, workspace_id: str, user_id: str) -> set[str]:
     """The join `list_actions`/`list_pending_approvals` need to scope personal
-    resources that carry no owner field of their own — one `list` call, never
-    a per-row lookup, so this stays a bounded join, not N+1."""
-    return {c.id for c in ctx.repos.commitments.list(workspace_id, user_id=user_id)}
+    resources that carry no owner field of their own — one indexed
+    `list_user_owned` call, never a per-row lookup, so this stays a bounded
+    join, not N+1, and never a workspace-wide read of Commitment either."""
+    return {c.id for c in ctx.repos.commitments.list_user_owned(workspace_id, user_id)}
 
 
 def _owned_action_ids(ctx: AppContext, *, workspace_id: str, user_id: str) -> set[str]:
@@ -104,10 +105,12 @@ def search_commitments(
 ) -> list[Commitment]:
     """Workspace AND user scoped: a commitment is a personal resource (see
     `_require_owned_commitment`), so listing must never hand back another
-    user's commitments just because they're in the same workspace. The
-    `user_id` filter happens in `Repository.list` itself, not here and not in
-    any transport layer — see that method's docstring."""
-    rows = ctx.repos.commitments.list(workspace_id, user_id=user_id)
+    user's commitments just because they're in the same workspace. Goes
+    through `Repository.list_user_owned` (the indexed path, backed by the
+    `UserOwnedIndex` GSI in production) rather than `Repository.list` --
+    never a workspace-wide read followed by a Python `user_id` filter, here
+    or in any transport layer. See that method's docstring."""
+    rows = ctx.repos.commitments.list_user_owned(workspace_id, user_id)
     if status:
         rows = [r for r in rows if r.status.value == status]
     if query:
@@ -350,9 +353,11 @@ def connect_integration_account(
 
 def list_integration_accounts(ctx: AppContext, *, workspace_id: str, user_id: str) -> list[IntegrationAccount]:
     """User-owned resource (`IntegrationAccount.user_id`, same as Commitment) —
-    scoped by both workspace_id and user_id in `Repository.list` itself, not by
-    loading every workspace account and filtering here or in the router."""
-    return ctx.repos.integration_accounts.list(workspace_id, user_id=user_id)
+    scoped by both workspace_id and user_id via the indexed `list_user_owned`
+    path (the `UserOwnedIndex` GSI in production), not by loading every
+    workspace account and filtering here, in the router, or with `Repository.
+    list`'s plain workspace-wide query."""
+    return ctx.repos.integration_accounts.list_user_owned(workspace_id, user_id)
 
 
 def _require_owned_integration_account(ctx: AppContext, *, workspace_id: str, account_id: str, user_id: str) -> IntegrationAccount:

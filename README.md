@@ -468,6 +468,38 @@ live AWS credentials. With `BEDROCK_ENABLED=true`, a real Bedrock failure is nev
 a mock result: both raise a classified, retryable `PromiseError` (`LLMProviderError` /
 `ExtractionProviderError`) instead. See `infra/README.md` for deployment notes.
 
+**DynamoDB access patterns**: `Repository.list(workspace_id, ...)` reads every row of one
+entity type in a workspace, then filters in Python (`EntityStore.query` — a DynamoDB Query on
+`PK = WORKSPACE#<workspace_id>`, never a Scan, but still every row of that entity type, not
+just the caller's own). That's fine for a workspace-wide resource, and fine at local/dev data
+volumes for anything. It stops being fine for a *personal* resource at production scale: every
+request would pay for every other user's rows too. Commitments and integration accounts are
+exactly that shape (`Commitment.user_id` / `IntegrationAccount.user_id`), so their list access
+pattern — `workspace_id + user_id` — gets an explicit, indexed path instead:
+`Repository.list_user_owned(workspace_id, user_id, **filters)`, used by
+`tools.search_commitments`/`tools.list_integration_accounts` and *only* those two. It queries
+the `UserOwnedIndex` GSI (`GSI1PK = WORKSPACE#<workspace_id>#USER#<user_id>`, `GSI1SK =
+<ENTITY>#<created_at>#<id>`) via `EntityStore.query_index` — a DynamoDB Query against
+`IndexName`, narrowed to one entity type with a sort-key prefix, returned in chronological
+order for free. **Ownership filtering is encoded in the index key itself, not applied as a
+`FilterExpression` after the fact** — a `FilterExpression` still pays for reading every row
+the Query's key condition matches before discarding the ones that fail the filter, so it would
+silently defeat the whole point of adding a GSI here. `filters` (e.g. `status=`) are still
+applied in Python, but only over the caller's own, already-narrow result set — never the
+workspace's. `Repository.list()` itself is unchanged and still the right call for a genuinely
+workspace-wide list (contacts, documents, audit events, ...); it never silently switches to an
+indexed Query under the hood, so a caller's choice of `list()` vs. `list_user_owned()` always
+matches what actually happens against the table. `Action`/`Approval`/`AgentRun` listing is
+deliberately **not** given a GSI here: `Action`/`Approval` carry no owner field of their own
+(ownership is transitive through `Action.commitment_id`, see "Resource ownership" above), so
+indexing them this way would mean writing a denormalized owner attribute onto rows that don't
+have one in the domain model just to make filtering easy — out of scope for "the smallest
+clean production solution"; `list_agent_runs`'s workspace-scan-then-filter is accepted as-is
+for now, a candidate for the same treatment later if it becomes a hot path, not because it's
+architecturally different from the commitment case. See `infra/README.md` for the GSI's
+table definition, its production rollout path for an existing table with data in it already,
+and `packages/shared/promise_shared/store/index_keys.py` / `dynamodb_schema.py` for the code.
+
 ## Known limitations / next steps
 
 - Identity & Authorization is v1 (see the section above): `AUTH_MODE=oidc` validates real
