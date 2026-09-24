@@ -27,11 +27,16 @@ class EntityStore(Protocol):
         """Admin/maintenance use only (e.g. cross-workspace jobs). Never expose to tenants."""
         ...
 
-    def query_index(self, index_name: str, partition_key: str, *, sort_key_prefix: str | None = None) -> list[dict]:
+    def query_index(
+        self, index_name: str, partition_key: str, *, sort_key_prefix: str | None = None, limit: int | None = None
+    ) -> list[dict]:
         """Query a named secondary index by partition key, optionally narrowed by a
-        sort-key `begins_with` prefix. Backs `Repository.list_user_owned` -- an
-        implementation must never fall back to a full-table Scan here. See
-        `store/index_keys.py` for the one GSI this currently supports."""
+        sort-key `begins_with` prefix and/or capped with `limit`. Backs
+        `Repository.list_user_owned` -- an implementation must never fall back to
+        a full-table Scan here. See `store/index_keys.py` for the one GSI this
+        currently supports. No pagination cursor: nothing in this codebase's
+        repository layer supports cursor-based pagination yet (see
+        `Repository.list`), so there is nothing for one to be consistent with."""
         ...
 
     def delete(self, entity: str, workspace_id: str, item_id: str) -> None: ...

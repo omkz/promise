@@ -63,12 +63,17 @@ class LocalJsonEntityStore:
     def query_all(self, entity: str) -> list[dict]:
         return list(self._read().get(entity, []))
 
-    def query_index(self, index_name: str, partition_key: str, *, sort_key_prefix: str | None = None) -> list[dict]:
+    def query_index(
+        self, index_name: str, partition_key: str, *, sort_key_prefix: str | None = None, limit: int | None = None
+    ) -> list[dict]:
         """In-memory stand-in for `DynamoEntityStore.query_index`: derives the same
         GSI1PK/GSI1SK every row would get in DynamoDB (`index_keys.
-        user_owned_index_keys`) and filters/sorts by them, rather than performing
-        a real Query -- correct for local dev/test data volumes, not a substitute
-        for the real Query semantics at production scale."""
+        user_owned_index_keys`) and filters/sorts by them -- a real indexed
+        lookup over this store's own in-memory rows (not a call to `query()`
+        with a Python filter bolted on), so it exercises the same access-path
+        contract `DynamoEntityStore.query_index` does, just without a real
+        Query. Correct for local dev/test data volumes, not a substitute for
+        the real Query's cost characteristics at production scale."""
         if index_name != USER_OWNED_INDEX:
             raise ValueError(f"unknown index {index_name!r}")
         data = self._read()
@@ -87,7 +92,8 @@ class LocalJsonEntityStore:
                     continue
                 matches.append((gsi_sk, row))
         matches.sort(key=lambda pair: pair[0])
-        return [row for _, row in matches]
+        rows = [row for _, row in matches]
+        return rows[:limit] if limit is not None else rows
 
     def delete(self, entity: str, workspace_id: str, item_id: str) -> None:
         with self._lock:

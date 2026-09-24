@@ -72,6 +72,14 @@ def test_user_a_and_user_b_each_see_only_their_own_integration_accounts(ctx):
     assert [a.id for a in b_rows] == [b_account.id]
 
 
+def test_list_user_owned_respects_limit(ctx):
+    _integration_account(ctx, USER_A, provider="gmail")
+    _integration_account(ctx, USER_A, provider="drive")
+
+    rows = ctx.repos.integration_accounts.list_user_owned(ctx.default_workspace_id, USER_A, limit=1)
+    assert len(rows) == 1
+
+
 def test_list_user_owned_ordering_is_chronological(ctx):
     first = _integration_account(ctx, USER_A, provider="gmail")
     second = _integration_account(ctx, USER_A, provider="drive")

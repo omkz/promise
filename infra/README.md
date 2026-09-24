@@ -32,15 +32,28 @@
    payload (table + index together).
 
    **Existing table** (this application is not assumed to be greenfield): do **not** delete
-   or recreate the table. Run `uv run python infra/deploy_gsi.py --table PROMISE --region
-   <region>` -- it checks whether the index already exists and, if not, issues an `UpdateTable`
-   with `GlobalSecondaryIndexUpdates: [{"Create": ...}]`, DynamoDB's supported way to add a GSI
-   to a live table online (table stays available throughout; DynamoDB backfills the index from
-   existing items in the background -- poll `describe_table`'s `IndexStatus` until `ACTIVE`).
-   One caveat: that backfill does not retroactively add `GSI1PK`/`GSI1SK` to rows written
-   *before* the index existed -- see `infra/deploy_gsi.py`'s docstring for why, and re-save
-   (any `update()`) old commitment/integration-account rows if they need to show up in the
-   indexed list before their next natural write.
+   or recreate the table. Run:
+
+   ```
+   uv run python infra/deploy_gsi.py --table PROMISE --region <region>
+   ```
+
+   This does two things, in order:
+   1. **Create the index if missing.** Checks whether `UserOwnedIndex` already exists and, if
+      not, issues an `UpdateTable` with `GlobalSecondaryIndexUpdates: [{"Create": ...}]` --
+      DynamoDB's supported way to add a GSI to a live table online (table stays available
+      throughout). It then polls `describe_table` until the new index's own `IndexStatus` is
+      `ACTIVE` before moving on. DynamoDB's own online backfill here only indexes items that
+      *already have* `GSI1PK`/`GSI1SK` -- which rows written before this code shipped don't.
+   2. **Backfill attribute values onto existing rows** (skip with `--skip-backfill`). Calls
+      `DynamoEntityStore.backfill_user_owned_index` for each entity in `USER_OWNED_ENTITIES`
+      (`commitment`, `integration_account`): scans that entity once (paging through the whole
+      table), and for each row whose `GSI1PK`/`GSI1SK` are missing or don't match what
+      `index_keys.user_owned_index_keys` would derive for it now, issues a targeted
+      `UpdateExpression` that sets only those two attributes -- never a `put_item`, so it can
+      never touch anything else on the row. Idempotent and safe to rerun: a row whose keys are
+      already correct is left alone, so re-running after a partial failure (or just as a
+      periodic safety net) only touches what's still wrong.
 
 2. Create an S3 bucket for document objects and set `S3_BUCKET`. (Document storage-key wiring
    to S3 is not implemented yet — see README "Known limitations".)

@@ -496,9 +496,19 @@ indexing them this way would mean writing a denormalized owner attribute onto ro
 have one in the domain model just to make filtering easy — out of scope for "the smallest
 clean production solution"; `list_agent_runs`'s workspace-scan-then-filter is accepted as-is
 for now, a candidate for the same treatment later if it becomes a hot path, not because it's
-architecturally different from the commitment case. See `infra/README.md` for the GSI's
-table definition, its production rollout path for an existing table with data in it already,
-and `packages/shared/promise_shared/store/index_keys.py` / `dynamodb_schema.py` for the code.
+architecturally different from the commitment case. `query_index` also accepts an optional
+`limit` (pushed down to DynamoDB's own `Limit`, capping items *read* per page — the final
+result can still come back shorter once `filters`/`include_deleted` apply after); there's no
+pagination cursor, because nothing in this repository layer supports cursor-based pagination
+yet for `query_index` to be consistent with. See `infra/README.md` for the GSI's table
+definition, its production rollout path for an existing table with data in it already
+(including `DynamoEntityStore.backfill_user_owned_index` — existing rows written before this
+GSI existed need their `GSI1PK`/`GSI1SK` populated explicitly; DynamoDB's own online GSI
+backfill only indexes rows that already carry those attributes), and
+`packages/shared/promise_shared/store/index_keys.py` / `dynamodb_schema.py` for the code.
+**A DynamoDB deployment is not indexing anything at production scale until `infra/deploy_gsi.py`
+has actually been run against it** — declaring the GSI in code is not the same as it existing
+on the live table.
 
 ## Known limitations / next steps
 

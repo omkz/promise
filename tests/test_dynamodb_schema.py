@@ -39,6 +39,12 @@ def test_table_definition_creates_the_gsi_alongside_the_base_table():
     assert {"PK", "SK", "GSI1PK", "GSI1SK"} <= attr_names
 
 
+def test_table_definition_declares_exactly_one_gsi_no_duplicates():
+    table = table_definition()
+    index_names = [g["IndexName"] for g in table["GlobalSecondaryIndexes"]]
+    assert index_names == [GSI_NAME]
+
+
 def test_add_gsi_update_is_additive_not_destructive():
     """The existing-table migration path: only declares the GSI's own new
     attributes and a Create action -- never touches the base table's own

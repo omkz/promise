@@ -117,3 +117,17 @@ def test_plain_workspace_query_never_touches_the_gsi_or_scans(monkeypatch):
 
     assert table.scan_calls == 0
     assert "IndexName" not in table.query_calls[0]
+
+
+def test_query_index_pushes_limit_down_to_the_query(monkeypatch):
+    store, table = _store(monkeypatch)
+    store.query_index(USER_OWNED_INDEX, "WORKSPACE#ws_1#USER#usr_1", sort_key_prefix="COMMITMENT#", limit=5)
+
+    assert table.query_calls[0]["Limit"] == 5
+
+
+def test_query_index_omits_limit_kwarg_when_not_given(monkeypatch):
+    store, table = _store(monkeypatch)
+    store.query_index(USER_OWNED_INDEX, "WORKSPACE#ws_1#USER#usr_1")
+
+    assert "Limit" not in table.query_calls[0]

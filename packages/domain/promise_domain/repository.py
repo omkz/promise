@@ -66,7 +66,9 @@ class Repository(Generic[T]):
             items = [i for i in items if getattr(i, field, None) == value]
         return items
 
-    def list_user_owned(self, workspace_id: str, user_id: str, *, include_deleted: bool = False, **filters: Any) -> list[T]:
+    def list_user_owned(
+        self, workspace_id: str, user_id: str, *, include_deleted: bool = False, limit: int | None = None, **filters: Any
+    ) -> list[T]:
         """The explicit, indexed path for a user-owned entity's list access pattern
         (workspace_id + user_id) -- only available on repositories constructed
         with `user_index` set (`Commitment`, `IntegrationAccount`; see repos.py).
@@ -77,13 +79,17 @@ class Repository(Generic[T]):
         narrowed to this entity type via a `sort_key_prefix`), which DynamoDB
         serves as a Query, never a Scan. `filters` are still applied in Python
         afterward, same as `list()` -- but only over the caller's own, already
-        narrow, result set, not the whole workspace partition.
+        narrow, result set, not the whole workspace partition. `limit`, when
+        given, is pushed down to the Query itself (DynamoDB's own `Limit`, capping
+        items *read* per page) -- not a substitute for `filters`/`include_deleted`,
+        which still run after, same as real DynamoDB's Limit-then-client-filter
+        semantics: the final result can be shorter than `limit`.
         """
         if self._user_index is None:
             raise ValueError(f"'{self._entity}' has no user-owned index configured (see repos.py)")
         start = time.perf_counter()
         rows = self._store.query_index(
-            self._user_index, f"WORKSPACE#{workspace_id}#USER#{user_id}", sort_key_prefix=f"{self._entity.upper()}#"
+            self._user_index, f"WORKSPACE#{workspace_id}#USER#{user_id}", sort_key_prefix=f"{self._entity.upper()}#", limit=limit
         )
         items = [self._model.model_validate(r) for r in rows]
         if not include_deleted and "deleted_at" in self._model.model_fields:

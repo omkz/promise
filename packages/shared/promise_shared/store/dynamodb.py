@@ -62,23 +62,92 @@ class DynamoEntityStore:
         )
         return [self._decode(x) for x in resp.get("Items", [])]
 
-    def query_index(self, index_name: str, partition_key: str, *, sort_key_prefix: str | None = None) -> list[dict]:
+    def query_index(
+        self, index_name: str, partition_key: str, *, sort_key_prefix: str | None = None, limit: int | None = None
+    ) -> list[dict]:
         """Query a named GSI by partition key, optionally narrowed by a sort-key
-        `begins_with` prefix. Always a DynamoDB Query against `IndexName`, never
-        a Scan -- this is the method the ownership-filtered list access patterns
-        (`Repository.list_user_owned`) go through instead of `query` + Python
-        filtering."""
+        `begins_with` prefix and/or capped with `Limit`. Always a DynamoDB Query
+        against `IndexName`, never a Scan -- this is the method the
+        ownership-filtered list access patterns (`Repository.list_user_owned`)
+        go through instead of `query` + Python filtering.
+
+        No generic `FilterExpression` passthrough: every current caller's extra
+        narrowing (e.g. `status=`) runs in Python in `Repository.list_user_owned`
+        over the already-tiny, already-owned rows this returns -- simpler than
+        wiring an arbitrary expression builder for filters that never touch more
+        than a handful of rows per user. `sort_key_prefix`/`limit` cover the
+        access patterns that actually exist today; nothing stops a future
+        `FilterExpression` kwarg being added here if that changes, as long as it
+        stays additive *after* this key condition, never a replacement for it.
+        """
         from boto3.dynamodb.conditions import Key
 
         condition = Key("GSI1PK").eq(partition_key)
         if sort_key_prefix:
             condition = condition & Key("GSI1SK").begins_with(sort_key_prefix)
-        resp = self.table.query(IndexName=index_name, KeyConditionExpression=condition)
+        kwargs: dict[str, Any] = {"IndexName": index_name, "KeyConditionExpression": condition}
+        if limit is not None:
+            kwargs["Limit"] = limit
+        resp = self.table.query(**kwargs)
         return [self._decode(x) for x in resp.get("Items", [])]
 
     def query_all(self, entity: str) -> list[dict]:
         scan = self.table.scan(FilterExpression="entity = :e", ExpressionAttributeValues={":e": entity})
         return [self._decode(x) for x in scan.get("Items", [])]
+
+    def backfill_user_owned_index(self, entity: str) -> dict[str, int]:
+        """One-time/rerunnable maintenance job: populate `GSI1PK`/`GSI1SK` on
+        existing `entity` rows written before the `UserOwnedIndex` GSI existed.
+        DynamoDB's online GSI backfill only indexes items that already HAVE the
+        index's key attributes at creation time -- rows written by an older
+        deploy never got them, so they're silently absent from `query_index`
+        results until they're rewritten some other way. This closes that gap
+        directly. See infra/README.md's migration note and `infra/deploy_gsi.py`
+        (extend that script rather than adding a second entry point).
+
+        Admin/maintenance only, like `query_all` -- built on the same Scan,
+        never call this on a tenant-facing request path.
+
+        Idempotent and safe to retry: scans once (paging through the whole
+        entity via `ExclusiveStartKey`), and for each row compares its current
+        `GSI1PK`/`GSI1SK` against what `user_owned_index_keys` would derive for
+        it right now. Already-correct rows are left untouched -- a rerun after
+        a partial failure only re-writes the rows still missing/wrong. Each
+        write is a targeted `UpdateExpression` setting only those two
+        attributes (never `put_item`), so it can never clobber any other
+        attribute on the item.
+        """
+        if entity not in USER_OWNED_ENTITIES:
+            raise ValueError(f"'{entity}' is not a user-owned entity (see index_keys.USER_OWNED_ENTITIES)")
+
+        counts = {"scanned": 0, "updated": 0, "already_correct": 0, "skipped_no_user_id": 0}
+        scan_kwargs: dict[str, Any] = {"FilterExpression": "entity = :e", "ExpressionAttributeValues": {":e": entity}}
+        while True:
+            resp = self.table.scan(**scan_kwargs)
+            for raw in resp.get("Items", []):
+                counts["scanned"] += 1
+                item = self._decode(raw)
+                user_id = item.get("user_id")
+                if not user_id:
+                    counts["skipped_no_user_id"] += 1
+                    continue
+                expected_pk, expected_sk = user_owned_index_keys(
+                    entity, item["workspace_id"], user_id, item.get("created_at", ""), item["id"]
+                )
+                if raw.get("GSI1PK") == expected_pk and raw.get("GSI1SK") == expected_sk:
+                    counts["already_correct"] += 1
+                    continue
+                self.table.update_item(
+                    Key={"PK": raw["PK"], "SK": raw["SK"]},
+                    UpdateExpression="SET GSI1PK = :pk, GSI1SK = :sk",
+                    ExpressionAttributeValues={":pk": expected_pk, ":sk": expected_sk},
+                )
+                counts["updated"] += 1
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            scan_kwargs["ExclusiveStartKey"] = last_key
+        return counts
 
     def delete(self, entity: str, workspace_id: str, item_id: str) -> None:
         pk, sk = self._keys(entity, workspace_id, item_id)
