@@ -8,13 +8,22 @@ from promise_shared.errors import ApprovalRequiredError, DuplicateActionError
 from ..context import AgentRepos
 
 
-def execute_action(action_id: str, workspace_id: str, repos: AgentRepos) -> Action:
+def execute_action(action_id: str, workspace_id: str, repos: AgentRepos, *, user_id: str) -> Action:
     """Execute a proposed side effect. Requires ActionStatus.APPROVED.
 
     Guards against duplicate execution two ways: the domain-level status
     check here (an EXECUTED action can never be executed again) and the
     integration provider's own idempotency_key check (protects against a
     retry after a timed-out response, per the reliability requirement).
+
+    `user_id` (the caller executing the action -- already ownership-verified
+    by `tools.execute_approved_action` before this is ever reached) selects
+    which provider actually performs a `send_message`: this user's own
+    connected Gmail account if they have one, otherwise the default (local)
+    provider, exactly as before Gmail existed. The `Draft` a `send_message`
+    action sends is always a PROMISE-local row regardless of which provider
+    ends up sending it (see `AgentRepos.integration`'s own docstring) — this
+    only changes who actually delivers it.
     """
     action = repos.actions.require(workspace_id, action_id)
     if action.status == ActionStatus.EXECUTED:
@@ -26,7 +35,8 @@ def execute_action(action_id: str, workspace_id: str, repos: AgentRepos) -> Acti
 
     try:
         if action.type.value == "send_message":
-            result = repos.integration.send_message(
+            provider = repos.integration_registry.resolve_for_user(workspace_id, user_id, provider_name="gmail") or repos.integration
+            result = provider.send_message(
                 workspace_id, draft_id=action.payload["draft_id"], idempotency_key=action.idempotency_key
             )
         else:

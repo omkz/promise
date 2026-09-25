@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 from promise_agent import llm
-from promise_agent.context_retrieval import ContextRetriever, build_commitment_query
+from promise_agent.context_retrieval import ContextRetriever, DocumentSearchProvider, MessageSearchProvider, build_commitment_query
 from promise_agent.steps import approval as approval_step
 from promise_agent.steps import completion as completion_step
 from promise_agent.steps import extraction as extraction_step
@@ -162,7 +162,11 @@ def retrieve_commitment_context(
     contact = ctx.repos.contacts.get(workspace_id, commitment.contact_id) if commitment.contact_id else None
 
     query = build_commitment_query(commitment, contact, user_id=user_id, limit=limit)
-    retriever = ContextRetriever(ctx.integrations.get())
+    providers = [DocumentSearchProvider(ctx.integrations.get()), MessageSearchProvider(ctx.integrations.get())]
+    gmail = ctx.integrations.resolve_for_user(workspace_id, user_id, provider_name="gmail")
+    if gmail is not None:
+        providers.append(MessageSearchProvider(gmail))
+    retriever = ContextRetriever(ctx.integrations.get(), providers=providers)
     outcome = retriever.retrieve(query)
 
     return {
@@ -192,12 +196,31 @@ def get_file(ctx: AppContext, *, workspace_id: str, file_id: str) -> dict[str, A
     return file
 
 
-def search_messages(ctx: AppContext, *, workspace_id: str, query: str) -> list[dict[str, Any]]:
-    return ctx.integrations.get().search_messages(workspace_id, query)
+def search_messages(ctx: AppContext, *, workspace_id: str, user_id: str, query: str) -> list[dict[str, Any]]:
+    """Local/demo messages plus, when the calling user has their own connected
+    Gmail account, that account's Gmail search results merged in. Gmail
+    participation is user-scoped by construction (`IntegrationRegistry.
+    resolve_for_user` looks the account up by `workspace_id` + `user_id`,
+    the authenticated principal — never a caller-supplied account id), so
+    User A's search never surfaces User B's Gmail messages even though the
+    endpoint itself is otherwise workspace-level. A Gmail failure here
+    propagates as the classified `IntegrationError` it is (see
+    `promise_shared.errors`) — this endpoint returns a bare list, so there is
+    no partial-result shape to quietly fall back into the way
+    `ContextRetriever` has for the agent's own retrieval step."""
+    results = ctx.integrations.get().search_messages(workspace_id, query)
+    gmail = ctx.integrations.resolve_for_user(workspace_id, user_id, provider_name="gmail")
+    if gmail is not None:
+        results = results + gmail.search_messages(workspace_id, query)
+    return results
 
 
-def get_message(ctx: AppContext, *, workspace_id: str, message_id: str) -> dict[str, Any]:
+def get_message(ctx: AppContext, *, workspace_id: str, user_id: str, message_id: str) -> dict[str, Any]:
     message = ctx.integrations.get().get_message(workspace_id, message_id)
+    if message is None:
+        gmail = ctx.integrations.resolve_for_user(workspace_id, user_id, provider_name="gmail")
+        if gmail is not None:
+            message = gmail.get_message(workspace_id, message_id)
     if message is None:
         raise NotFoundError("message", message_id)
     return message

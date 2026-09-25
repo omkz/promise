@@ -34,7 +34,7 @@ def search_messages(
     query: str = "", principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
 ) -> list[dict[str, Any]]:
     require(principal, Permission.CONTEXT_READ)
-    return tools.search_messages(ctx, workspace_id=principal.workspace_id, query=query)
+    return tools.search_messages(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, query=query)
 
 
 @router.get("/messages/{message_id}")
@@ -42,7 +42,7 @@ def get_message(
     message_id: str, principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
 ) -> dict[str, Any]:
     require(principal, Permission.CONTEXT_READ)
-    return tools.get_message(ctx, workspace_id=principal.workspace_id, message_id=message_id)
+    return tools.get_message(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, message_id=message_id)
 
 
 @router.get("/contacts")

@@ -3,7 +3,7 @@ name = "promise-integrations"
 version = "0.1.0"
 description = "PROMISE integration provider abstraction + local/demo provider"
 requires-python = ">=3.10"
-dependencies = ["promise-domain", "promise-shared"]
+dependencies = ["promise-domain", "promise-shared", "httpx>=0.28,<1"]
 
 [build-system]
 requires = ["setuptools>=68"]

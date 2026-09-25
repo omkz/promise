@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from promise_app.bootstrap import AppContext
+from promise_integrations.gmail import GmailNotConfigured
 from promise_shared.errors import (
     ApprovalRequiredError,
     AuthenticationRequired,
@@ -17,6 +18,14 @@ from promise_shared.errors import (
     DuplicateActionError,
     ExtractionProviderError,
     InsufficientScope,
+    IntegrationAuthorizationRequired,
+    IntegrationAuthorizationRevoked,
+    IntegrationInvalidRequest,
+    IntegrationNotConnected,
+    IntegrationPermissionDenied,
+    IntegrationRateLimited,
+    IntegrationTokenExpired,
+    IntegrationUnavailable,
     InvalidToken,
     LLMProviderError,
     NotFoundError,
@@ -109,6 +118,61 @@ def _llm_provider_error(_: Request, exc: LLMProviderError) -> JSONResponse:
     return JSONResponse(
         {"error": str(exc), "provider": exc.provider_name, "retryable": exc.retryable}, status_code=503
     )
+
+
+# ---- external integration providers (Gmail, ...) -------------------------------------------
+#
+# Never echoes a raw provider response body, an OAuth token, or an Authorization header --
+# `str(exc)` only ever carries the short, fixed detail strings built in promise_shared.errors.
+
+
+@app.exception_handler(IntegrationNotConnected)
+def _integration_not_connected(_: Request, exc: IntegrationNotConnected) -> JSONResponse:
+    return JSONResponse({"error": str(exc), "provider": exc.provider_name}, status_code=409)
+
+
+@app.exception_handler(IntegrationAuthorizationRequired)
+def _integration_authorization_required(_: Request, exc: IntegrationAuthorizationRequired) -> JSONResponse:
+    return JSONResponse({"error": str(exc), "provider": exc.provider_name}, status_code=401)
+
+
+@app.exception_handler(IntegrationTokenExpired)
+def _integration_token_expired(_: Request, exc: IntegrationTokenExpired) -> JSONResponse:
+    return JSONResponse({"error": str(exc), "provider": exc.provider_name}, status_code=401)
+
+
+@app.exception_handler(IntegrationAuthorizationRevoked)
+def _integration_authorization_revoked(_: Request, exc: IntegrationAuthorizationRevoked) -> JSONResponse:
+    return JSONResponse({"error": str(exc), "provider": exc.provider_name}, status_code=401)
+
+
+@app.exception_handler(IntegrationPermissionDenied)
+def _integration_permission_denied(_: Request, exc: IntegrationPermissionDenied) -> JSONResponse:
+    return JSONResponse({"error": str(exc), "provider": exc.provider_name}, status_code=403)
+
+
+@app.exception_handler(IntegrationRateLimited)
+def _integration_rate_limited(_: Request, exc: IntegrationRateLimited) -> JSONResponse:
+    headers = {"Retry-After": str(int(exc.retry_after))} if exc.retry_after else {}
+    return JSONResponse({"error": str(exc), "provider": exc.provider_name}, status_code=429, headers=headers)
+
+
+@app.exception_handler(IntegrationUnavailable)
+def _integration_unavailable(_: Request, exc: IntegrationUnavailable) -> JSONResponse:
+    return JSONResponse({"error": str(exc), "provider": exc.provider_name}, status_code=503)
+
+
+@app.exception_handler(IntegrationInvalidRequest)
+def _integration_invalid_request(_: Request, exc: IntegrationInvalidRequest) -> JSONResponse:
+    return JSONResponse({"error": str(exc), "provider": exc.provider_name}, status_code=400)
+
+
+@app.exception_handler(GmailNotConfigured)
+def _gmail_not_configured(_: Request, exc: GmailNotConfigured) -> JSONResponse:
+    """An admin/deployment configuration gap (missing GOOGLE_CLIENT_ID/SECRET/
+    REDIRECT_URI), not a per-user "not connected" state -- 503, matching how
+    every other unconfigured/unavailable provider dependency is surfaced."""
+    return JSONResponse({"error": str(exc), "provider": "gmail"}, status_code=503)
 
 
 @app.exception_handler(ValueError)

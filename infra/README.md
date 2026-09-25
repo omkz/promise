@@ -70,8 +70,12 @@
    resolution is header-based with a seeded dev workspace fallback (see
    `services/api/promise_api/deps.py`). This is the top priority before any multi-tenant
    production use.
-7. Move `IntegrationAccount` secrets (OAuth tokens) into AWS Secrets Manager and store only
-   the secret's reference (`secret_ref`) in DynamoDB — the domain model already carries this
-   field but nothing wires it up yet.
+7. `IntegrationAccount` secrets (Gmail OAuth tokens today) are wired up: set
+   `SECRET_STORE_BACKEND=aws` (region from `AWS_REGION`, secret name prefix from
+   `SECRETS_MANAGER_PREFIX`, default `promise/`) so `AwsSecretsManagerStore`
+   (`packages/shared/promise_shared/secrets/aws_secrets_manager.py`) is used instead of the
+   dev-only local file store — `IntegrationAccount.secret_ref` only ever holds a pointer into
+   it, never a raw token. See the root README's "Gmail Integration" section (points 3-6) for
+   OAuth credential setup, required scopes, and the full connect/callback flow.
 
 See the official AWS AgentCore MCP runtime documentation for the current deployment contract.

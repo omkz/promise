@@ -104,3 +104,9 @@ export const connectIntegration = (provider: string, account_identifier: string)
 
 export const disconnectIntegration = (id: string) =>
   request<IntegrationAccount>(`/api/integrations/${id}/disconnect`, { method: "POST" });
+
+// Gmail OAuth kickoff: fetched (with the usual auth headers) rather than a plain link,
+// since a browser's top-level navigation to a link can never carry X-Dev-User-Id /
+// Authorization headers -- see services/api/promise_api/routers/integrations.py's
+// gmail_connect docstring. The caller navigates the browser itself once this resolves.
+export const startGmailConnect = () => request<{ authorization_url: string }>(`/api/integrations/gmail/connect`);

@@ -667,12 +667,14 @@ name = "promise-integrations"
 version = "0.1.0"
 source = { editable = "packages/integrations" }
 dependencies = [
+    { name = "httpx" },
     { name = "promise-domain" },
     { name = "promise-shared" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "promise-domain", editable = "packages/domain" },
     { name = "promise-shared", editable = "packages/shared" },
 ]

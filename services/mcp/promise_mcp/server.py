@@ -219,10 +219,12 @@ def get_file(file_id: str, mcp_ctx: Context | None = None) -> dict[str, Any]:
 
 @mcp.tool()
 def search_messages(query: str, mcp_ctx: Context | None = None) -> list[dict[str, Any]]:
-    """Search messages/email-like notes through the connected integration provider."""
+    """Search messages/email-like notes through the connected integration provider(s)
+    -- includes the calling user's own connected Gmail account automatically when
+    one exists, no Gmail-specific logic here (see `promise_app.tools.search_messages`)."""
     principal = _authenticate(mcp_ctx)
     require(principal, Permission.CONTEXT_READ)
-    return _dump(tools.search_messages(ctx, workspace_id=principal.workspace_id, query=query))
+    return _dump(tools.search_messages(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, query=query))
 
 
 @mcp.tool()
@@ -230,7 +232,7 @@ def get_message(message_id: str, mcp_ctx: Context | None = None) -> dict[str, An
     """Return a single message."""
     principal = _authenticate(mcp_ctx)
     require(principal, Permission.CONTEXT_READ)
-    return _dump(tools.get_message(ctx, workspace_id=principal.workspace_id, message_id=message_id))
+    return _dump(tools.get_message(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, message_id=message_id))
 
 
 @mcp.tool()

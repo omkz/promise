@@ -394,12 +394,10 @@ argument, or `X-User-Id`-style header — identity always comes from
   `disconnect_integration_account` requires `principal.user_id == account.user_id` directly.
 - **List-level isolation** (same file): workspace membership is *also* not enough to **list**
   another user's personal resources — a leak the single-resource checks above didn't close.
-  `search_commitments` is scoped by both `workspace_id` and `user_id`; the filter happens in
-  `Repository.list(workspace_id, user_id=...)` itself (a `**filters` kwarg applied against the
-  already workspace-scoped store query — see `packages/domain/promise_domain/repository.py`),
-  never by loading every workspace commitment and filtering in the router. `list_integration_accounts`
-  uses the same `Repository.list(workspace_id, user_id=...)` seam for `IntegrationAccount`.
-  `list_actions` and
+  `search_commitments`/`list_integration_accounts` are scoped by both `workspace_id` and
+  `user_id` via `Repository.list_user_owned` — the indexed path (the `UserOwnedIndex` GSI in
+  production DynamoDB, a Query, never a Scan or a workspace-wide read filtered in Python; see
+  "DynamoDB access patterns" below for the full design). `list_actions` and
   `list_pending_approvals` derive the caller's owned commitment/action ids with one bounded
   `Repository.list` join each (`_owned_commitment_ids`/`_owned_action_ids` — not N+1) and narrow
   to those; `list_actions(commitment_id=...)` additionally rejects an unowned commitment outright
@@ -510,6 +508,139 @@ backfill only indexes rows that already carry those attributes), and
 has actually been run against it** — declaring the GSI in code is not the same as it existing
 on the live table.
 
+## Gmail Integration
+
+```
+PROMISE
+  |
+  v
+GmailIntegrationProvider (packages/integrations/promise_integrations/gmail/)
+  |-- search_messages   (Gmail messages.list + per-id messages.get, format=full)
+  |-- get_message
+  \-- send_message      (Gmail messages.send -- RFC 2822 MIME, base64url raw field)
+```
+
+v1 is deliberately narrow: Gmail search/read (for Context Retrieval) and Gmail send (for the
+approval-gated execution step) only. **No Google Drive, no Google Contacts, no Gmail Draft
+API, no mailbox sync** — PROMISE's own `Draft`/`Action` model remains the one approval
+boundary regardless of which provider ends up sending a message (see "Resource ownership"
+above and `packages/agent/promise_agent/action_planning/send_message_planner.py`, which
+always calls the *default* local provider's `create_draft`, never Gmail's).
+
+**1. Create Google OAuth credentials.** In Google Cloud Console: create an OAuth 2.0 Client ID
+   (Web application type), enable the Gmail API for the project, and add an OAuth consent
+   screen requesting only the two scopes below.
+
+**2. Required redirect URI**: exactly `GOOGLE_REDIRECT_URI` (below) — e.g.
+   `http://localhost:8000/api/integrations/gmail/callback` for local dev,
+   `https://<your-api-host>/api/integrations/gmail/callback` in production. Must match the URI
+   registered on the OAuth client exactly (Google rejects a mismatch).
+
+**3. Required scopes** (centralized in `promise_integrations/gmail/config.py`, never scattered
+   across the codebase):
+   ```
+   https://www.googleapis.com/auth/gmail.readonly
+   https://www.googleapis.com/auth/gmail.send
+   ```
+   Never `gmail.modify`/`gmail.compose`/`mail.google.com` — v1 has no reason to touch Gmail's
+   own Draft API or otherwise mutate a mailbox beyond sending a message PROMISE's own approval
+   flow already authorized. **Google's OAuth verification process**: requesting `gmail.send`
+   (a "restricted" scope) from real end users requires completing Google's app verification
+   (and, depending on usage, a security assessment) before the consent screen can serve
+   external users at any real volume — this repository does not claim that verification is
+   complete; it is a deployment prerequisite, not something `GMAIL_ENABLED=true` does for you.
+
+**4. Local OAuth setup** — in `services/api/.env` (see `.env.example` for the full list):
+   ```env
+   GMAIL_ENABLED=true
+   GOOGLE_CLIENT_ID=<your-client-id>
+   GOOGLE_CLIENT_SECRET=<your-client-secret>
+   GOOGLE_REDIRECT_URI=http://localhost:8000/api/integrations/gmail/callback
+   WEB_APP_URL=http://localhost:3000
+   SECRET_STORE_BACKEND=local   # dev/test only -- see "Token storage" below
+   ```
+   `GMAIL_ENABLED=false` (the default) means the feature doesn't exist at runtime at all —
+   `IntegrationRegistry` never registers a Gmail provider factory, so every Gmail-aware call
+   site (`resolve_for_user`) behaves exactly as it did before Gmail existed. Never commit real
+   credentials — `.env` is gitignored; only `.env.example` (placeholders) is tracked.
+
+**5. How to connect Gmail**: sign in to the web app, open **Connections**, click **Connect
+   Gmail**. Mechanically: the client calls `GET /api/integrations/gmail/connect` (with the
+   normal auth headers — `X-Dev-User-Id` locally / `Authorization: Bearer` in `oidc` mode) to
+   get a Google authorization URL, then navigates the browser there itself (a plain link can't
+   carry those headers on a top-level navigation, so this can't be a direct redirect from that
+   endpoint). Google redirects back to `GET /api/integrations/gmail/callback` — a route with no
+   PROMISE auth headers at all (top-level navigation from `accounts.google.com`); identity
+   instead comes from the random, single-use, principal-bound `state` value the `/connect` call
+   created (`promise_app/gmail_oauth.py`), never from a query parameter. On success it redirects
+   to `{WEB_APP_URL}/connections?gmail=connected`; on any failure, `?gmail=error` — never a
+   token in the URL either way.
+
+**6. How PROMISE stores credentials securely**: `IntegrationAccount` (the same domain model
+   every provider connection uses) never carries a raw token — only `secret_ref`, a pointer.
+   The actual `{access_token, refresh_token, expires_at}` live in a separate `SecretStore`
+   (`packages/shared/promise_shared/secrets/`): `SECRET_STORE_BACKEND=local` (dev/test) writes
+   one file per secret, named by a hash of its ref, permissioned `0600`, under
+   `LOCAL_SECRETS_DIR`; `SECRET_STORE_BACKEND=aws` (recommended for any real, `STORAGE_BACKEND=
+   dynamodb` deployment) writes to AWS Secrets Manager, one secret named
+   `<SECRETS_MANAGER_PREFIX><ref>` per account — no AWS account id/region/secret ARN hard-coded
+   anywhere, only `AWS_REGION`/`SECRETS_MANAGER_PREFIX`. Access tokens refresh automatically
+   (`GmailIntegrationProvider._access_token`, with a one-shot refresh-and-retry on an
+   unexpected 401 too) using the stored refresh token; if Google reports the refresh token
+   itself as revoked, the stored secret is deleted immediately (never retried) and the account
+   needs to be reconnected.
+
+**7. How Gmail is used in retrieval**: `GmailIntegrationProvider`/`MockGmailIntegrationProvider`
+   are just another `ContextSearchProvider` (`MessageSearchProvider`, the same adapter class
+   `LocalIntegrationProvider`'s messages already use) added to the list `ContextRetriever` fans
+   out to — never a special code path inside `ContextRetriever`/`retriever.py` itself. Both
+   `promise_agent.steps.retrieval.retrieve_context` (the orchestrator's own retrieval step, run
+   during `handle_commitment`) and `tools.retrieve_commitment_context` (the on-demand endpoint)
+   look up the commitment/request's own owning user's connected Gmail account
+   (`IntegrationRegistry.resolve_for_user`) and add it to the provider list only when one
+   exists; dedup is the existing `(type, source_id)` key `ContextRetriever` already uses. If
+   Gmail isn't connected, retrieval runs exactly as it always has (local providers only, no
+   fake Gmail results). If the Gmail provider itself fails mid-request, `ContextRetriever`'s
+   existing per-provider error handling marks the retrieval `PARTIAL` (not `COMPLETE`) and
+   keeps whatever the other providers found — never a fabricated result standing in for Gmail's.
+   `tools.search_messages`/`get_message` (the generic message-search endpoints, used by both
+   REST and the MCP `search_messages`/`get_message` tools) gain the same per-user Gmail
+   participation automatically — no Gmail-specific code was added to either adapter, exactly as
+   intended ("MCP tools should benefit automatically through the shared application layer").
+
+**8. How Gmail sending is approval-gated**: identical to every other `SEND_MESSAGE` action —
+   `Action` -> `WAITING_FOR_APPROVAL` -> explicit `decide_approval` -> `execute_approved_action`
+   -> `completed`; `GmailIntegrationProvider` never sees an action before that state machine
+   allows it to. The only thing Gmail changes is *who* performs the send: `execute_action`
+   (`packages/agent/promise_agent/steps/execution.py`) resolves the acting user's own connected
+   Gmail account and uses it if present, else falls back to the default (local) provider —
+   never a redesign of the approval flow itself. Duplicate-send protection is two-layered: the
+   existing `Action.status == EXECUTED` check (raises `DuplicateActionError` before Gmail is
+   ever called again) and, since a `GmailIntegrationProvider` is constructed fresh per call
+   rather than a long-lived singleton, a second guard keyed off the `Draft`'s own durable
+   `status` (`SENT` -> treated as an idempotent replay, Gmail is never called again for it) —
+   covers the "timed out after Gmail may have already accepted it" case specifically.
+
+**9. Current limitation**: v1 always searches Gmail live, per request — there is no mailbox
+   sync/indexing subsystem, and nothing about a connected mailbox is copied into
+   DynamoDB/local JSON beyond the OAuth tokens themselves (data minimization, by design — see
+   `GmailIntegrationProvider`'s own docstring). This means retrieval latency includes a live
+   Gmail API round trip whenever a connected account participates, and there's no way to search
+   Gmail content PROMISE hasn't been asked to search in the current request.
+
+**10. Future**: an incremental sync/indexing layer (e.g. periodically pulling and caching
+   recent messages, using Gmail's `historyId`/`users.history.list` for incremental updates) is
+   a natural next step if live-per-request latency becomes a problem — `ContextSearchProvider`
+   is exactly the seam it would plug into, with no changes to `ContextRetriever` or its callers,
+   the same way Gmail itself plugged in.
+
+**Try it**: `uv run pytest tests/test_gmail_mime.py tests/test_gmail_oauth_client.py
+tests/test_gmail_provider.py tests/test_gmail_mock_provider.py tests/test_gmail_oauth_flow.py
+tests/test_gmail_oauth_routes.py tests/test_gmail_context_retrieval.py
+tests/test_gmail_authorization.py tests/test_gmail_approval_flow.py tests/test_secret_store.py`
+— `httpx.MockTransport`-backed fakes for every Google HTTP call, no live network or real
+Google/AWS credentials required.
+
 ## Known limitations / next steps
 
 - Identity & Authorization is v1 (see the section above): `AUTH_MODE=oidc` validates real
@@ -518,11 +649,16 @@ on the live table.
   yet (only the header/token plumbing), and Alexa+'s actual account-linking deployment
   configuration isn't implemented — `_authenticate` in `services/mcp/promise_mcp/server.py`
   is the documented extension point for it.
-- Only one integration provider exists (`LocalIntegrationProvider`, demo/local data). Gmail,
-  Drive, Slack, etc. are additive: implement `IntegrationProvider` and register it — no
-  changes needed in `packages/agent` or `packages/app`.
-- `IntegrationAccount.secret_ref` is a placeholder pointer; there is no real Secrets Manager
-  integration yet, and no OAuth flow.
+- Two integration providers exist now: `LocalIntegrationProvider` (demo/local data, still the
+  default/workspace-wide one) and `GmailIntegrationProvider` (see "Gmail Integration" above —
+  messages only: search/read/send, no Drive/Contacts/mailbox sync). Drive, Slack, etc. remain
+  additive the same way Gmail was: implement `IntegrationProvider` and register a factory — no
+  changes needed in `packages/agent`/`packages/app`. Gmail's own OAuth scopes have not gone
+  through Google's app verification process (see "Gmail Integration" point 3) — that's a real
+  deployment prerequisite for serving external users, not something this repository does.
+- `IntegrationAccount.secret_ref` now points into a real `SecretStore` (local file store for
+  dev/test, AWS Secrets Manager in production — see "Gmail Integration" point 6) for Gmail.
+  Other future providers' credentials would use the same seam.
 - Context retrieval (`packages/agent/promise_agent/context_retrieval/`) is v1: deterministic
   lexical/keyword + metadata ranking, no semantic/vector search yet. The `ContextSearchProvider`
   and `RankingStrategy` seams are shaped for that to be a later addition without

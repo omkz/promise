@@ -16,12 +16,19 @@ from promise_domain.models import (
     Draft,
     IntegrationAccount,
     Message,
+    OAuthState,
     User,
     Workspace,
     WorkspaceMembership,
 )
 from promise_domain.repository import Repository
+from promise_integrations.registry import IntegrationRegistry
 from promise_shared.store import USER_OWNED_INDEX, EntityStore
+
+# See `OAuthState`'s own docstring: every state row lives in this one reserved
+# pseudo-workspace, never a real tenant workspace id, since a state token is looked
+# up by its own value alone before we otherwise know which workspace it belongs to.
+OAUTH_STATE_PARTITION = "_oauth_state"
 
 
 class WorkspaceRepository:
@@ -64,6 +71,7 @@ class RepoSet:
     drafts: Repository[Draft]
     approvals: Repository[Approval]
     integration_accounts: Repository[IntegrationAccount]
+    oauth_states: Repository[OAuthState]
     agent_runs: Repository[AgentRun]
     agent_steps: Repository[AgentStep]
     audit_events: Repository[AuditEvent]
@@ -83,13 +91,14 @@ def build_repo_set(store: EntityStore) -> RepoSet:
         drafts=Repository(store, "draft", Draft),
         approvals=Repository(store, "approval", Approval),
         integration_accounts=Repository(store, "integration_account", IntegrationAccount, user_index=USER_OWNED_INDEX),
+        oauth_states=Repository(store, "oauth_state", OAuthState),
         agent_runs=Repository(store, "agent_run", AgentRun),
         agent_steps=Repository(store, "agent_step", AgentStep),
         audit_events=Repository(store, "audit_event", AuditEvent),
     )
 
 
-def build_agent_repos(repos: RepoSet, integration) -> AgentRepos:
+def build_agent_repos(repos: RepoSet, integrations: IntegrationRegistry) -> AgentRepos:
     return AgentRepos(
         commitments=repos.commitments,
         sources=repos.sources,
@@ -102,5 +111,6 @@ def build_agent_repos(repos: RepoSet, integration) -> AgentRepos:
         agent_runs=repos.agent_runs,
         agent_steps=repos.agent_steps,
         audit_events=repos.audit_events,
-        integration=integration,
+        integration=integrations.get(),
+        integration_registry=integrations,
     )

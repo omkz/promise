@@ -121,7 +121,7 @@ class AgentOrchestrator:
             raise ValueError(f"action '{action_id}' has no associated agent run")
 
         with self._step(agent_run, AgentStepName.EXECUTION, ["execution.execute_action"]) as step:
-            executed = execution_step.execute_action(action_id, workspace_id, self.repos)
+            executed = execution_step.execute_action(action_id, workspace_id, self.repos, user_id=actor)
             step.output_summary = f"Action {action_id} -> {executed.status.value}"
             if executed.status.value == "failed":
                 step.status = AgentStepStatus.FAILED

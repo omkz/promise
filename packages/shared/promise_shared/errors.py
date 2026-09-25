@@ -148,3 +148,91 @@ class WorkspaceAccessDenied(PromiseError):
     def __init__(self, workspace_id: str) -> None:
         super().__init__(f"no active membership in workspace '{workspace_id}'")
         self.workspace_id = workspace_id
+
+
+# ---- external integration providers (Gmail, ...) ------------------------------------------------
+#
+# Defined here, not in `promise_integrations`, for the same reason as the identity/authorization
+# errors above: every layer maps through this one `PromiseError` taxonomy, and `promise_domain`/
+# `promise_app` must never depend on a specific provider package. Every subclass's message is
+# built only from `provider_name` and a short, fixed `detail` string — never a raw provider
+# response body, an OAuth token, or an `Authorization` header value.
+
+
+class IntegrationError(PromiseError):
+    """Base class for every external-integration-provider error (Gmail today; Drive/Slack/etc.
+    later)."""
+
+    def __init__(self, provider_name: str, detail: str) -> None:
+        super().__init__(f"{provider_name} integration error: {detail}")
+        self.provider_name = provider_name
+
+
+class IntegrationNotConnected(IntegrationError):
+    """The calling user has no connected account for this provider at all. Maps to HTTP 409 —
+    the request is well-formed, but the account state it depends on doesn't exist yet."""
+
+    def __init__(self, provider_name: str) -> None:
+        super().__init__(provider_name, "no connected account for this user")
+
+
+class IntegrationAuthorizationRequired(IntegrationError):
+    """An account exists but has never completed (or has lost) authorization — distinct from
+    `IntegrationTokenExpired` (a routine, refreshable expiry) and `IntegrationAuthorizationRevoked`
+    (was authorized, then explicitly revoked). Maps to HTTP 401."""
+
+    def __init__(self, provider_name: str) -> None:
+        super().__init__(provider_name, "authorization is required")
+
+
+class IntegrationTokenExpired(IntegrationError):
+    """The access token expired and could not be silently refreshed (e.g. no refresh token on
+    file). Maps to HTTP 401. A routine expiry that *can* be refreshed is never raised as this —
+    see `GmailIntegrationProvider`'s own refresh-on-401 handling."""
+
+    def __init__(self, provider_name: str) -> None:
+        super().__init__(provider_name, "access token expired and could not be refreshed")
+
+
+class IntegrationAuthorizationRevoked(IntegrationError):
+    """The refresh token was rejected by the provider (the user revoked access outside PROMISE,
+    e.g. from their Google Account settings). Maps to HTTP 401. Callers must mark the
+    `IntegrationAccount` disconnected/revoked on this error, never retry the same refresh."""
+
+    def __init__(self, provider_name: str) -> None:
+        super().__init__(provider_name, "authorization was revoked; reconnect required")
+
+
+class IntegrationPermissionDenied(IntegrationError):
+    """The provider rejected the request as forbidden for reasons other than an expired/revoked
+    token (e.g. a scope PROMISE never requested). Maps to HTTP 403."""
+
+    def __init__(self, provider_name: str, detail: str = "permission denied") -> None:
+        super().__init__(provider_name, detail)
+
+
+class IntegrationRateLimited(IntegrationError):
+    """The provider is throttling this account/app. Maps to HTTP 429. `retry_after` (seconds),
+    when the provider supplies one, lets a caller back off correctly instead of guessing."""
+
+    def __init__(self, provider_name: str, *, retry_after: float | None = None) -> None:
+        super().__init__(provider_name, "rate limited")
+        self.retry_after = retry_after
+
+
+class IntegrationUnavailable(IntegrationError):
+    """The provider itself is down/unreachable/erroring in a way unrelated to this specific
+    request (5xx, timeout, connection failure). Maps to HTTP 503. Retryable by nature — never
+    silently substituted with a fabricated result."""
+
+    def __init__(self, provider_name: str, detail: str = "provider unavailable") -> None:
+        super().__init__(provider_name, detail)
+
+
+class IntegrationInvalidRequest(IntegrationError):
+    """PROMISE sent the provider a request it rejected as malformed (bad recipient, unparseable
+    MIME, unsupported operation for this provider/version, ...). Maps to HTTP 400 — retrying the
+    identical request will not help."""
+
+    def __init__(self, provider_name: str, detail: str) -> None:
+        super().__init__(provider_name, detail)

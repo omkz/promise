@@ -190,6 +190,32 @@ class IntegrationAccount(BaseModel):
     updated_at: str = Field(default_factory=iso_now)
 
 
+class OAuthState(BaseModel):
+    """A random, single-use OAuth `state` value (see `promise_app.gmail_oauth`),
+    bound at creation to the authenticated principal that started the flow —
+    the callback trusts *this row*, never a `workspace_id`/`user_id` a client
+    could put in a query parameter.
+
+    Looked up by its own `id` (the state token itself) alone, before the
+    caller is otherwise identifiable — the one thing an OAuth callback proves
+    is that it carries the exact opaque token we handed out. `Repository`
+    requires a `workspace_id` for every lookup, and there is no real workspace
+    to scope by yet at that point, so every row lives in the reserved
+    `OAUTH_STATE_PARTITION` pseudo-workspace instead — the same kind of
+    deliberate, documented exception `WorkspaceRepository` is for itself (see
+    `repos.py`), never a real tenant workspace id.
+    """
+
+    id: str
+    workspace_id: str
+    provider: str
+    bound_workspace_id: str
+    bound_user_id: str
+    expires_at: str
+    consumed_at: str | None = None
+    created_at: str = Field(default_factory=iso_now)
+
+
 class WorkspaceMembership(BaseModel):
     """A user's membership in a workspace — the thing `promise_auth`'s identity
     resolution actually checks (never a caller-supplied workspace_id alone).
