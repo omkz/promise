@@ -18,8 +18,12 @@ from .repos import OAUTH_STATE_PARTITION
 authorization-code flow -- the exact same shape as `gmail_oauth.py`, reusing
 the same shared `GoogleOAuthClient` (see that module's docstring) with a
 `CalendarConfig` in place of a `GmailConfig`. Deliberately NOT a second
-independent OAuth implementation: only the config/scopes/redirect URI and
-the `IntegrationAccount.provider`/secret_ref namespace differ from Gmail's.
+independent OAuth implementation: only the config/scopes/redirect URI, the
+`IntegrationAccount.provider`/secret_ref namespace, and the identity lookup
+(`get_identity` here vs `get_profile` in `gmail_oauth.py` -- Calendar's own
+scope grants no access to Gmail's `users.getProfile`, so account identity
+comes from Google's provider-neutral OIDC userinfo endpoint instead) differ
+from Gmail's.
 
 Incremental authorization: because Calendar uses its own registered redirect
 URI (`GOOGLE_CALENDAR_REDIRECT_URI`) and its own narrow scope set
@@ -80,7 +84,11 @@ def handle_calendar_oauth_callback(ctx: AppContext, *, state_token: str, code: s
     config = load_calendar_config()
     client = GoogleOAuthClient(config)
     tokens = client.exchange_code(code)
-    profile = client.get_profile(access_token=tokens["access_token"])
+    # `get_identity`, not `get_profile`: Calendar's own scope (`calendar.events.owned`,
+    # plus the minimal `openid`/`userinfo.email` identity scopes -- see
+    # `CalendarConfig`'s docstring) grants no access to Gmail's `users.getProfile`, so
+    # identity here comes from Google's provider-neutral OIDC userinfo endpoint instead.
+    identity = client.get_identity(access_token=tokens["access_token"])
 
     existing = next(
         iter(
@@ -108,7 +116,7 @@ def handle_calendar_oauth_callback(ctx: AppContext, *, state_token: str, code: s
         workspace_id=state.bound_workspace_id,
         user_id=state.bound_user_id,
         provider="google_calendar",
-        account_identifier=profile["email"],
+        account_identifier=identity["email"],
         status=IntegrationStatus.CONNECTED,
         scopes=list(config.scopes),
         secret_ref=secret_ref,

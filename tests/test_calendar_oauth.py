@@ -40,6 +40,9 @@ class _FakeOAuthClient:
     def get_profile(self, *, access_token):
         return {"email": self._email, "history_id": "hist_1"}
 
+    def get_identity(self, *, access_token):
+        return {"email": self._email, "sub": "sub_1"}
+
 
 @pytest.fixture(autouse=True)
 def _google_env(monkeypatch):
@@ -51,6 +54,44 @@ def _google_env(monkeypatch):
 
 def _patch_client(monkeypatch, **kwargs):
     monkeypatch.setattr(calendar_oauth, "GoogleOAuthClient", lambda config: _FakeOAuthClient(config, **kwargs))
+
+
+# ---- account identity: Google's OIDC userinfo endpoint, never Gmail's API -------------------
+
+def test_calendar_callback_identifies_the_account_via_google_identity_api_not_gmail(ctx, monkeypatch):
+    """Uses the REAL `GoogleOAuthClient` (only its HTTP transport is swapped for
+    `httpx.MockTransport` -- the class's own documented test seam, see its
+    docstring), so this exercises the actual production `get_identity` code path,
+    never a hand-written test double standing in for it. Proves the callback
+    resolves the connected account's email from Google's OIDC userinfo endpoint,
+    and never touches Gmail's `users/me/profile` -- Calendar's scope grants no
+    access to that endpoint at all."""
+    import httpx
+    from promise_integrations.gmail.config import GMAIL_API_BASE, GOOGLE_USERINFO_ENDPOINT
+    from promise_integrations.gmail.oauth import GoogleOAuthClient as RealGoogleOAuthClient
+
+    requested_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if str(request.url).endswith("/token"):
+            return httpx.Response(200, json={"access_token": "at_1", "refresh_token": "rt_1", "expires_in": 3600})
+        if str(request.url) == GOOGLE_USERINFO_ENDPOINT:
+            return httpx.Response(200, json={"email": "andi@example.com", "sub": "sub_123"})
+        raise AssertionError(f"unexpected request to {request.url}")  # e.g. Gmail's profile endpoint
+
+    monkeypatch.setattr(
+        calendar_oauth, "GoogleOAuthClient",
+        lambda config: RealGoogleOAuthClient(config, transport=httpx.MockTransport(handler)),
+    )
+
+    url = calendar_oauth.start_calendar_oauth(ctx, workspace_id=WORKSPACE, user_id=USER_A)
+    state_token = parse_qs(urlparse(url).query)["state"][0]
+    account = calendar_oauth.handle_calendar_oauth_callback(ctx, state_token=state_token, code="auth-code")
+
+    assert account.account_identifier == "andi@example.com"
+    assert any(u == GOOGLE_USERINFO_ENDPOINT for u in requested_urls)
+    assert not any(u.startswith(GMAIL_API_BASE) for u in requested_urls)
 
 
 # ---- shared OAuth client, not a second implementation --------------------------------------

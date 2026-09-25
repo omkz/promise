@@ -16,11 +16,20 @@ change/delete events on calendars owned by the authenticated user. Never the
 broader `calendar` scope, and never `calendar.acls`/`calendar.calendars`/
 `calendar.settings.readonly`/`calendar.freebusy` unless a concrete v1
 requirement proves one necessary (none does yet).
+
+Also requests `openid`/`userinfo.email` -- the minimal identity scopes needed
+for `GoogleOAuthClient.get_identity` (Google's OIDC userinfo endpoint) to
+identify which Google account authorized Calendar access. Deliberately NOT
+any `gmail.*` scope: Calendar OAuth must work standalone, without ever
+depending on Gmail permission, so account identity is resolved through
+Google's provider-neutral identity API instead of Gmail's `users.getProfile`.
 """
 
 CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 
 DEFAULT_CALENDAR_SCOPES: tuple[str, ...] = (
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/calendar.events.owned",
 )
 
@@ -50,6 +59,15 @@ def calendar_enabled() -> bool:
     return os.getenv("CALENDAR_ENABLED", "false").strip().lower() == "true"
 
 
+def load_default_event_duration_minutes() -> int:
+    """`CALENDAR_DEFAULT_EVENT_DURATION_MINUTES` alone -- unlike `load_calendar_config`,
+    this reads no OAuth credential env vars, so callers that only need the configured
+    default duration (e.g. `CreateCalendarEventPlanner`) never have to satisfy
+    `CalendarNotConfigured` just to plan an action. `load_calendar_config` below reuses
+    this rather than re-parsing the same env var a second way."""
+    return int(os.getenv("CALENDAR_DEFAULT_EVENT_DURATION_MINUTES", str(DEFAULT_EVENT_DURATION_MINUTES)))
+
+
 def load_calendar_config() -> CalendarConfig:
     """Reuses `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (the same Google Cloud
     OAuth client Gmail uses -- one Google Cloud project, two scope sets) --
@@ -70,7 +88,5 @@ def load_calendar_config() -> CalendarConfig:
         redirect_uri=redirect_uri,
         scopes=scopes,
         state_ttl_seconds=int(os.getenv("GOOGLE_OAUTH_STATE_TTL", str(DEFAULT_STATE_TTL_SECONDS))),
-        default_event_duration_minutes=int(
-            os.getenv("CALENDAR_DEFAULT_EVENT_DURATION_MINUTES", str(DEFAULT_EVENT_DURATION_MINUTES))
-        ),
+        default_event_duration_minutes=load_default_event_duration_minutes(),
     )

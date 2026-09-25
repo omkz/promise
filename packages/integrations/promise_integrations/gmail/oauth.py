@@ -13,7 +13,7 @@ from promise_shared.errors import (
     IntegrationUnavailable,
 )
 
-from .config import GMAIL_AUTH_ENDPOINT, GMAIL_TOKEN_ENDPOINT
+from .config import GMAIL_AUTH_ENDPOINT, GMAIL_TOKEN_ENDPOINT, GOOGLE_USERINFO_ENDPOINT
 
 PROVIDER_NAME = "gmail"
 
@@ -48,12 +48,14 @@ def _normalize_token_response(body: dict[str, Any]) -> dict[str, Any]:
 
 
 class GoogleOAuthClient:
-    """Server-side Google OAuth 2.0 authorization-code flow, plus the one Gmail
-    profile lookup needed to identify which mailbox got connected -- shared by
-    every Google-backed provider (Gmail, Google Calendar), never duplicated
-    per provider. `get_profile` is Gmail-specific (it calls Gmail's own
-    `users.getProfile`); Calendar doesn't need an identity lookup of its own,
-    so it simply never calls that method.
+    """Server-side Google OAuth 2.0 authorization-code flow, plus two account-identity
+    lookups -- shared by every Google-backed provider (Gmail, Google Calendar), never
+    duplicated per provider. `get_profile` is Gmail-specific (it calls Gmail's own
+    `users.getProfile`, which requires a `gmail.*` scope); `get_identity` is
+    provider-neutral (Google's OIDC userinfo endpoint, which only requires the minimal
+    `openid`/`userinfo.email` identity scopes) -- Calendar uses `get_identity` so
+    identifying the connected account never requires requesting a Gmail scope it
+    doesn't otherwise need.
 
     Talks to Google over plain HTTP via `httpx` (the documented REST endpoints
     -- no `google-auth`/`google-api-python-client` SDK dependency). `transport`
@@ -142,3 +144,25 @@ class GoogleOAuthClient:
             raise IntegrationInvalidRequest(PROVIDER_NAME, f"HTTP {resp.status_code}")
         body = resp.json()
         return {"email": body["emailAddress"], "history_id": body.get("historyId")}
+
+    def get_identity(self, *, access_token: str) -> dict[str, Any]:
+        """Provider-neutral Google account identity via the OIDC userinfo endpoint --
+        works for any grant that included the `openid`/`userinfo.email` scopes, no
+        matter which product scopes (Gmail, Calendar, ...) rode along with it. This is
+        what Calendar OAuth uses to identify the connected account (see
+        `promise_app.calendar_oauth`) instead of `get_profile`, since Calendar's own
+        scope (`calendar.events.owned`) grants no access to Gmail's `users.getProfile`."""
+        resp = self._client.get(GOOGLE_USERINFO_ENDPOINT, headers={"Authorization": f"Bearer {access_token}"})
+        if resp.status_code == 401:
+            raise IntegrationAuthorizationRevoked(PROVIDER_NAME)
+        if resp.status_code == 403:
+            raise IntegrationPermissionDenied(PROVIDER_NAME)
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After")
+            raise IntegrationRateLimited(PROVIDER_NAME, retry_after=float(retry_after) if retry_after else None)
+        if resp.status_code >= 500:
+            raise IntegrationUnavailable(PROVIDER_NAME, f"HTTP {resp.status_code}")
+        if resp.status_code >= 400:
+            raise IntegrationInvalidRequest(PROVIDER_NAME, f"HTTP {resp.status_code}")
+        body = resp.json()
+        return {"email": body["email"], "sub": body.get("sub")}

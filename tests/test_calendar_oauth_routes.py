@@ -28,8 +28,8 @@ class _FakeOAuthClient:
     def exchange_code(self, code):
         return {"access_token": "at_1", "refresh_token": "rt_1", "expires_at": time.time() + 3600}
 
-    def get_profile(self, *, access_token):
-        return {"email": "andi@example.com", "history_id": "1"}
+    def get_identity(self, *, access_token):
+        return {"email": "andi@example.com", "sub": "sub_1"}
 
 
 def _principal_for(workspace_id: str, user_id: str) -> AuthenticatedPrincipal:

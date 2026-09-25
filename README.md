@@ -737,12 +737,27 @@ refresh-on-expiry/refresh-on-401/revocation handling. Only the scopes, redirect 
 
 **1. Required scope** (centralized in `promise_integrations/calendar/config.py`):
    ```
+   openid
+   https://www.googleapis.com/auth/userinfo.email
    https://www.googleapis.com/auth/calendar.events.owned
    ```
-   Deliberately the narrowest scope that covers v1's needs (view/create/change/delete events on
-   calendars the authenticated user owns) — never the broad `calendar` scope, and never
-   `calendar.acls`/`calendar.calendars`/`calendar.settings.readonly`/`calendar.freebusy`, none of
-   which any implemented v1 operation needs.
+   `calendar.events.owned` is deliberately the narrowest scope that covers v1's needs
+   (view/create/change/delete events on calendars the authenticated user owns) — never the broad
+   `calendar` scope, and never `calendar.acls`/`calendar.calendars`/`calendar.settings.readonly`/
+   `calendar.freebusy`, none of which any implemented v1 operation needs. `openid`/
+   `userinfo.email` are the minimal identity scopes needed to resolve which Google account
+   connected (see "Account identity" below) — **never** a Gmail scope (`gmail.readonly` etc.):
+   Calendar OAuth works standalone, with no Gmail permission required at all.
+
+**1b. Account identity**: identifying which Google account authorized Calendar access does
+   **not** reuse Gmail's `users.getProfile` (that would require a Gmail scope Calendar has no
+   other reason to request). Instead, `handle_calendar_oauth_callback`
+   (`packages/app/promise_app/calendar_oauth.py`) calls `GoogleOAuthClient.get_identity`
+   (`packages/integrations/promise_integrations/gmail/oauth.py`, shared with Gmail's OAuth
+   plumbing but not Gmail-specific), which hits Google's provider-neutral OIDC userinfo endpoint
+   (`https://openidconnect.googleapis.com/v1/userinfo`) — the standard way to resolve an account's
+   email from a token that only carries `openid`/`userinfo.email` scope. Gmail's own OAuth flow is
+   unaffected: `gmail_oauth.py` still calls `get_profile` exactly as before.
 
 **2. Required redirect URI**: `GOOGLE_CALENDAR_REDIRECT_URI` — its own registered URI, separate
    from Gmail's `GOOGLE_REDIRECT_URI` (e.g.
@@ -804,9 +819,12 @@ refresh-on-expiry/refresh-on-401/revocation handling. Only the scopes, redirect 
    `commitment.due_at` (already resolved by the existing temporal-normalization engine — see
    `commitment_extraction/temporal.py`) is used verbatim as the explicit, timezone-aware start
    time; the planner never re-parses text or lets an LLM guess a time. No explicit duration in the
-   commitment -> a configurable default (`CALENDAR_DEFAULT_EVENT_DURATION_MINUTES`, 30 minutes)
-   is used, and the assumption is stated explicitly in the proposed action's own rationale, never
-   silently assumed. **Attendee safety**: a contact with a verified email is invited; a contact
+   commitment -> the actually configured default (`CALENDAR_DEFAULT_EVENT_DURATION_MINUTES`, 30
+   minutes unless overridden) is used — read at plan time via
+   `promise_integrations.calendar.config.load_default_event_duration_minutes()`, never a
+   hard-coded module constant, so an operator's env override takes effect — and the assumption is
+   stated explicitly in the proposed action's own rationale, never silently assumed. **Attendee
+   safety**: a contact with a verified email is invited; a contact
    with no verified email is never invited by guessing one — the event is still proposed (useful
    as a personal calendar entry on its own), just without an attendee, and the rationale says so
    explicitly ("... will not be invited automatically — no verified email is on file."). Location

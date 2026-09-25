@@ -80,6 +80,19 @@ def test_plan_uses_default_duration_and_states_the_assumption_explicitly(ctx):
     assert "no duration was stated explicitly" in action_plan.rationale
 
 
+def test_plan_uses_the_configured_default_duration_not_the_hard_coded_30(ctx, monkeypatch):
+    """CALENDAR_DEFAULT_EVENT_DURATION_MINUTES=45 -> end_at is start_at + 45 minutes,
+    proving the planner reads the actual configured value rather than a hard-coded
+    30-minute module constant."""
+    monkeypatch.setenv("CALENDAR_DEFAULT_EVENT_DURATION_MINUTES", "45")
+    commitment = _commitment()
+    result = CreateCalendarEventPlanner().plan(commitment, None, [], repos=ctx.agent_repos, agent_run_id=new_id("run"))
+    action_plan = result["action_plan"]
+    assert action_plan.payload["start_at"] == "2026-09-25T14:00:00+07:00"
+    assert action_plan.payload["end_at"] == "2026-09-25T14:45:00+07:00"
+    assert "45-minute duration" in action_plan.rationale
+
+
 def test_plan_with_no_due_at_raises_rather_than_inventing_a_time(ctx):
     commitment = _commitment(due_at=None)
     with pytest.raises(PlanningError):

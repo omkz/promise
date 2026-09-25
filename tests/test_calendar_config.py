@@ -8,6 +8,7 @@ from promise_integrations.calendar.config import (
     CalendarNotConfigured,
     calendar_enabled,
     load_calendar_config,
+    load_default_event_duration_minutes,
 )
 
 """CalendarConfig / calendar_enabled / load_calendar_config -- centralized
@@ -27,8 +28,19 @@ def _set_env(monkeypatch, **overrides):
         monkeypatch.setenv(key, value)
 
 
-def test_default_scope_is_the_narrow_events_owned_scope():
-    assert DEFAULT_CALENDAR_SCOPES == ("https://www.googleapis.com/auth/calendar.events.owned",)
+def test_default_scope_is_the_narrow_events_owned_scope_plus_minimal_identity_scopes():
+    """`calendar.events.owned` for the actual Calendar access, plus `openid` +
+    `userinfo.email` -- the minimal identity scopes `GoogleOAuthClient.get_identity`
+    needs to resolve which Google account connected -- and nothing else."""
+    assert DEFAULT_CALENDAR_SCOPES == (
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/calendar.events.owned",
+    )
+
+
+def test_default_scope_never_requests_a_gmail_scope():
+    assert not any("gmail" in scope for scope in DEFAULT_CALENDAR_SCOPES)
 
 
 def test_default_scope_excludes_broad_and_unnecessary_scopes():
@@ -80,6 +92,21 @@ def test_load_calendar_config_uses_its_own_redirect_uri_not_gmails(monkeypatch):
     monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://promise.example/gmail/callback")
     config = load_calendar_config()
     assert config.redirect_uri == "https://promise.example/calendar/callback"
+
+
+def test_load_default_event_duration_minutes_default(monkeypatch):
+    monkeypatch.delenv("CALENDAR_DEFAULT_EVENT_DURATION_MINUTES", raising=False)
+    assert load_default_event_duration_minutes() == DEFAULT_EVENT_DURATION_MINUTES
+
+
+def test_load_default_event_duration_minutes_override_requires_no_oauth_credentials(monkeypatch):
+    """Unlike `load_calendar_config`, this never raises `CalendarNotConfigured` --
+    `CreateCalendarEventPlanner` reads the configured duration even when Calendar
+    OAuth itself isn't configured (planning never depends on live credentials)."""
+    for key in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_CALENDAR_REDIRECT_URI"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("CALENDAR_DEFAULT_EVENT_DURATION_MINUTES", "45")
+    assert load_default_event_duration_minutes() == 45
 
 
 def test_calendar_config_is_constructible_directly():

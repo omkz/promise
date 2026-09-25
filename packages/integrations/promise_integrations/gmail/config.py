@@ -19,6 +19,13 @@ GMAIL_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 GMAIL_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1"
 
+# Google's provider-neutral OIDC userinfo endpoint -- identifies whichever Google
+# account authorized a grant that included the `openid`/`userinfo.email` scopes,
+# regardless of which product scopes (Gmail, Calendar, ...) came with it. Used by
+# `GoogleOAuthClient.get_identity` -- unlike `get_profile` (Gmail's own
+# `users.getProfile`), this never requires a Gmail-specific scope.
+GOOGLE_USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo"
+
 DEFAULT_SCOPES: tuple[str, ...] = (
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",

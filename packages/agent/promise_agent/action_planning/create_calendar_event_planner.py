@@ -6,7 +6,7 @@ from typing import Any
 
 from promise_domain.enums import ActionStatus, ActionType
 from promise_domain.models import Action, Commitment, Contact
-from promise_integrations.calendar.config import DEFAULT_EVENT_DURATION_MINUTES
+from promise_integrations.calendar.config import load_default_event_duration_minutes
 from promise_shared.ids import new_id
 
 from ..context import AgentRepos
@@ -57,8 +57,9 @@ class CreateCalendarEventPlanner:
             # at all can't be turned into a calendar event.
             raise PlanningError("No date/time could be resolved for this meeting — nothing to schedule yet.")
 
+        duration_minutes = load_default_event_duration_minutes()
         start_at = commitment.due_at
-        end_at = _add_minutes(start_at, DEFAULT_EVENT_DURATION_MINUTES)
+        end_at = _add_minutes(start_at, duration_minutes)
         timezone = os.getenv("PROMISE_TIMEZONE", "Asia/Jakarta")
 
         # Contact safety (see the README's "Attendee safety" note): a contact with no
@@ -85,7 +86,7 @@ class CreateCalendarEventPlanner:
             rationale=(
                 f"Commitment action \"{commitment.action}\" matches a meeting/scheduling workflow; "
                 f"using the commitment's own resolved date/time ({start_at}) and a default "
-                f"{DEFAULT_EVENT_DURATION_MINUTES}-minute duration (no duration was stated explicitly)."
+                f"{duration_minutes}-minute duration (no duration was stated explicitly)."
                 + attendee_note
             ),
             target_contact_id=contact.id if contact else None,
