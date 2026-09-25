@@ -81,6 +81,7 @@ class GmailIntegrationProvider:
         self._documents = documents
         self._blob_store = blob_store
         self._max_attachment_bytes = config.max_attachment_bytes
+        self._attachment_encoding_margin = config.attachment_encoding_margin
         self._oauth = GoogleOAuthClient(config, transport=transport)
         self._http = httpx.Client(transport=transport, timeout=10.0)
 
@@ -177,10 +178,22 @@ class GmailIntegrationProvider:
         from `self._blob_store` (via `Document.storage_key`) -- **never**
         `Document.content_text` (extracted text), even when a binary artifact
         exists but happens to be missing from the store: that raises
-        `DocumentArtifactMissing`, never a silent fall back to text. Oversized
-        artifacts (`config.max_attachment_bytes`, see `GmailConfig`) raise
-        `AttachmentTooLarge` before any MIME message is built or Gmail is
-        called at all.
+        `DocumentArtifactMissing`, never a silent fall back to text.
+
+        Size safety (`config.max_attachment_bytes` is Gmail's own *total
+        encoded message* size limit, not a raw-attachment-bytes budget -- see
+        `GmailConfig`'s own docstring): two checks, both raising
+        `AttachmentTooLarge` before Gmail is ever called.
+          1. A fast pre-check on the attachment's raw bytes against
+             `max_attachment_bytes / attachment_encoding_margin` -- conservative
+             (base64 inflates content by exactly 4/3, plus MIME overhead), so it
+             rejects an obviously-too-large attachment before any MIME message
+             is even built.
+          2. The authoritative check: once the actual base64url-encoded message
+             exists, its literal length (never an estimate) is compared directly
+             against `max_attachment_bytes`. This is what actually decides
+             pass/fail; the pre-check is only a fast path to the same answer for
+             the common case of an attachment that's obviously too big.
         """
         draft = self._drafts.require(workspace_id, draft_id)
         if draft.status == DraftStatus.SENT:
@@ -194,11 +207,19 @@ class GmailIntegrationProvider:
             blob = self._blob_store.get(document.storage_key)
             if blob is None:
                 raise DocumentArtifactMissing(document.id)
-            if blob.size_bytes > self._max_attachment_bytes:
+            conservative_raw_limit = int(self._max_attachment_bytes / self._attachment_encoding_margin)
+            if blob.size_bytes > conservative_raw_limit:
                 raise AttachmentTooLarge(document.id, size_bytes=blob.size_bytes, max_bytes=self._max_attachment_bytes)
             attachment = {"filename": blob.filename, "content_type": blob.content_type, "content_bytes": blob.data}
 
         raw = build_raw_send_message(to=draft.recipient, subject=draft.subject, body=draft.body, attachment=attachment)
+
+        # Authoritative: base64url is pure ASCII, so len(raw) in characters is exactly
+        # its byte count -- the literal size of what's about to be sent, not an estimate.
+        if len(raw) > self._max_attachment_bytes:
+            document_id = draft.attachment_document_id or draft.id
+            raise AttachmentTooLarge(document_id, size_bytes=len(raw), max_bytes=self._max_attachment_bytes)
+
         resp = self._request("POST", "/users/me/messages/send", json={"raw": raw})
         sent = resp.json()
 

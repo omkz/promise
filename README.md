@@ -663,10 +663,17 @@ always calls the *default* local provider's `create_draft`, never Gmail's).
    workaround; it never labels plain text as DOCX/PDF, and never writes text into a file with a
    misleading extension. `GmailIntegrationProvider.send_message` loads the artifact through
    `DocumentBlobStore` and refuses, rather than substitutes, when something's wrong: no artifact
-   at all raises `DocumentArtifactMissing` (never a silent fall back to `content_text`); an
-   artifact over `GMAIL_MAX_ATTACHMENT_BYTES` (default 25 MiB — Gmail's own documented
-   `messages.send` limit) raises `AttachmentTooLarge` before any MIME message is built or Gmail
-   is called at all. A development-only download route exists too:
+   at all raises `DocumentArtifactMissing` (never a silent fall back to `content_text`).
+   `GMAIL_MAX_ATTACHMENT_BYTES` (default 25 MiB) is Gmail's own documented `messages.send`
+   limit for the **total encoded message**, not the attachment's raw byte count — raw bytes
+   alone aren't a safe proxy, since base64 content-transfer-encoding inflates content by
+   exactly 4/3 before MIME overhead on top of that. Two checks, both raising
+   `AttachmentTooLarge` before Gmail is ever called: a fast pre-check on the attachment's raw
+   bytes against `max_attachment_bytes / GMAIL_ATTACHMENT_ENCODING_MARGIN` (default `1.35`, a
+   fixed conservative margin covering base64 + MIME overhead) before any MIME message is
+   built, and the authoritative check — the literal length of the actual base64url-encoded
+   message, compared directly against the limit, right before calling `messages.send`.
+   A development-only download route exists too:
    `GET /api/documents/{document_id}/artifact` (`tools.get_document_artifact`) — workspace-scoped
    the same way `get_file` is (`Document` has no per-user ownership; see "Resource ownership"
    above), never exposing a raw storage key/path to the client.

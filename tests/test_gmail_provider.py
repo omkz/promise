@@ -449,6 +449,83 @@ def test_send_message_rejects_an_oversized_attachment_before_building_or_sending
     assert reloaded.status != DraftStatus.SENT
 
 
+def test_send_message_with_attachment_comfortably_under_the_limit_succeeds(ctx):
+    _seed_valid_token(ctx)
+    document = _make_document(ctx, artifact_bytes=b"small attachment")
+    draft = _make_draft(ctx, attachment_document_id=document.id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": "gmail_sent_ok", "threadId": "gmail_thread_ok"})
+
+    result = _provider(ctx, handler).send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+    assert result["idempotent_replay"] is False
+    assert result["provider_message_id"] == "gmail_sent_ok"
+
+
+def test_send_message_rejects_raw_bytes_that_would_exceed_the_limit_once_base64_encoded(ctx):
+    """The regression this whole fix is about: an attachment whose RAW byte
+    count is under max_attachment_bytes but would exceed it once base64
+    content-transfer-encoding inflates it by 4/3 must still be rejected --
+    comparing raw bytes directly against the encoded-message limit is not
+    a safe check."""
+    from promise_shared.errors import AttachmentTooLarge
+
+    _seed_valid_token(ctx)
+    # raw size is under max_attachment_bytes (100) but well over max/margin (100/1.35 ≈ 74)
+    document = _make_document(ctx, artifact_bytes=b"x" * 90)
+    draft = _make_draft(ctx, attachment_document_id=document.id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must never call Gmail when raw bytes leave no room for encoding overhead")
+
+    small_config = GmailConfig(
+        client_id="cid", client_secret="csecret", redirect_uri="https://promise.example/callback",
+        scopes=("https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"),
+        state_ttl_seconds=600, max_attachment_bytes=100,
+    )
+    provider = GmailIntegrationProvider(
+        account_id=ACCOUNT_ID, workspace_id=WORKSPACE, secret_ref=SECRET_REF, secret_store=ctx.secret_store,
+        config=small_config, drafts=ctx.repos.drafts, documents=ctx.repos.documents, blob_store=ctx.blob_store,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(AttachmentTooLarge):
+        provider.send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+
+
+def test_send_message_final_encoded_size_check_catches_what_the_pre_check_cannot(ctx):
+    """The pre-check only runs when there's an attachment. A plain-text-only
+    message has no pre-check at all -- the *final* encoded-size check is the
+    only thing standing between an oversized body and Gmail, proving it's a
+    real, independent second layer, not dead code shadowed by the pre-check."""
+    from promise_shared.errors import AttachmentTooLarge
+
+    _seed_valid_token(ctx)
+    draft = _make_draft(ctx, body="x" * 500, attachment_document_id=None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must never call Gmail once the final encoded message exceeds the limit")
+
+    tiny_config = GmailConfig(
+        client_id="cid", client_secret="csecret", redirect_uri="https://promise.example/callback",
+        scopes=("https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"),
+        state_ttl_seconds=600, max_attachment_bytes=50,
+    )
+    provider = GmailIntegrationProvider(
+        account_id=ACCOUNT_ID, workspace_id=WORKSPACE, secret_ref=SECRET_REF, secret_store=ctx.secret_store,
+        config=tiny_config, drafts=ctx.repos.drafts, documents=ctx.repos.documents, blob_store=ctx.blob_store,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(AttachmentTooLarge) as excinfo:
+        provider.send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+    assert excinfo.value.max_bytes == 50
+    assert excinfo.value.size_bytes > 50
+
+    reloaded = ctx.repos.drafts.require(WORKSPACE, draft.id)
+    assert reloaded.status != DraftStatus.SENT
+
+
 def test_send_message_attachment_with_international_filename_survives_round_trip(ctx):
     import base64
     import email

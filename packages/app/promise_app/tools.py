@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from promise_agent import llm
 from promise_agent.context_retrieval import ContextRetriever, DocumentSearchProvider, MessageSearchProvider, build_commitment_query
+from promise_agent.document_revision import build_revised_document
 from promise_agent.steps import approval as approval_step
 from promise_agent.steps import completion as completion_step
 from promise_agent.steps import extraction as extraction_step
@@ -16,7 +16,6 @@ from promise_domain.models import (
     AuditEvent,
     Commitment,
     Contact,
-    Document,
     IntegrationAccount,
 )
 from promise_shared.errors import DocumentArtifactMissing, NotFoundError, VerifiedContactRequiredError, WorkspaceAccessError
@@ -250,17 +249,17 @@ def get_message(ctx: AppContext, *, workspace_id: str, user_id: str, message_id:
 # ---- drafting / revision ----------------------------------------------------
 
 def prepare_revision(ctx: AppContext, *, workspace_id: str, document_id: str, feedback: str) -> dict[str, Any]:
+    """The manual, on-demand counterpart to `SendRevisedDocumentPlanner`'s own
+    revision step -- both go through `build_revised_document` (packages/agent)
+    so a document revised here carries the exact same real binary artifact
+    (never just `content_text`) a document revised by the agent does; see
+    that function's own docstring."""
     source = get_file(ctx, workspace_id=workspace_id, file_id=document_id)
     revised_text, changes = llm.revise_document(source.get("content_text", ""), feedback)
-    revised_doc = Document(
-        id=new_id("doc"),
-        workspace_id=workspace_id,
-        name=re.sub(r"(\.[^.]+)$", r"_revised\1", source["name"]),
-        type=source.get("type", "text/plain"),
-        content_text=revised_text,
-        metadata={"derived_from": document_id, "changes": changes, "agent_generated": True},
+    revised_doc = build_revised_document(
+        workspace_id=workspace_id, source_doc=source, revised_text=revised_text, changes=changes,
+        documents=ctx.repos.documents, blob_store=ctx.blob_store,
     )
-    ctx.repos.documents.save(revised_doc)
     return {"document": revised_doc, "changes": changes}
 
 

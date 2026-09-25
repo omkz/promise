@@ -26,12 +26,25 @@ DEFAULT_SCOPES: tuple[str, ...] = (
 
 DEFAULT_STATE_TTL_SECONDS = 600
 
-# Gmail's own documented `messages.send` limit is 25 MB total message size (which the raw,
-# base64-encoded RFC 2822 message -- headers, body, and attachment together -- must fit
-# under): https://developers.google.com/gmail/api/guides/sending. This is checked against
-# the *attachment's own* raw byte size before it's ever base64-encoded, as a conservative,
-# fail-fast bound -- not an attempt to model the encoded message's exact final size.
+# Gmail's own documented `messages.send` limit is 25 MB TOTAL MESSAGE SIZE -- the
+# complete base64url-encoded RFC 2822 message (headers, body, and attachment together),
+# not the attachment's own raw byte count: https://developers.google.com/gmail/api/guides/sending.
+# `GmailIntegrationProvider.send_message` treats this as the authoritative limit, checked
+# against the literal length of the final encoded message right before calling Gmail --
+# see `attachment_encoding_margin` below for the earlier, fast pre-check this budget also
+# drives.
 DEFAULT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+# base64 content-transfer-encoding inflates content by exactly 4/3; MIME multipart
+# headers/boundaries/Content-* headers add a further small, roughly-fixed overhead on
+# top of that. 1.35 is a documented, fixed safety margin (never tuned per-message) used
+# only for a fast, conservative pre-check on the attachment's own raw byte count --
+# `raw_bytes > max_attachment_bytes / attachment_encoding_margin` rejects an attachment
+# before any MIME message is even built when it's obviously going to blow the limit once
+# encoded. It is deliberately conservative (i.e. rejects some borderline-fine attachments
+# too) because the actual pass/fail authority is the final encoded-message-size check
+# that always runs afterward, not this estimate.
+DEFAULT_ATTACHMENT_ENCODING_MARGIN = 1.35
 
 
 @dataclass(frozen=True)
@@ -42,6 +55,7 @@ class GmailConfig:
     scopes: tuple[str, ...]
     state_ttl_seconds: int
     max_attachment_bytes: int = DEFAULT_MAX_ATTACHMENT_BYTES
+    attachment_encoding_margin: float = DEFAULT_ATTACHMENT_ENCODING_MARGIN
 
 
 class GmailNotConfigured(RuntimeError):
@@ -73,4 +87,7 @@ def load_gmail_config() -> GmailConfig:
         scopes=scopes,
         state_ttl_seconds=int(os.getenv("GOOGLE_OAUTH_STATE_TTL", str(DEFAULT_STATE_TTL_SECONDS))),
         max_attachment_bytes=int(os.getenv("GMAIL_MAX_ATTACHMENT_BYTES", str(DEFAULT_MAX_ATTACHMENT_BYTES))),
+        attachment_encoding_margin=float(
+            os.getenv("GMAIL_ATTACHMENT_ENCODING_MARGIN", str(DEFAULT_ATTACHMENT_ENCODING_MARGIN))
+        ),
     )
