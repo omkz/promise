@@ -2,21 +2,39 @@
 
 import { useEffect, useState } from "react";
 import Nav from "../../components/Nav";
-import { decideApproval, executeAction, listActions, listPendingApprovals, type Action, type Approval } from "../../lib/api";
+import {
+  decideApproval, executeAction, getCommitments, listActions, listPendingApprovals,
+  type Action, type Approval, type Commitment,
+} from "../../lib/api";
+
+function formatPayloadKey(key: string): string {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatPayloadValue(value: unknown): string {
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "—";
+  if (value === null || value === undefined || value === "") return "—";
+  return String(value);
+}
 
 export default function ApprovalsPage() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [actions, setActions] = useState<Record<string, Action>>({});
+  const [commitments, setCommitments] = useState<Record<string, Commitment>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
 
   async function refresh() {
-    const [pending, allActions] = await Promise.all([listPendingApprovals(), listActions()]);
+    const [pending, allActions, allCommitments] = await Promise.all([listPendingApprovals(), listActions(), getCommitments()]);
     setApprovals(pending);
     setActions(Object.fromEntries(allActions.map((a) => [a.id, a])));
+    setCommitments(Object.fromEntries(allCommitments.map((c) => [c.id, c])));
   }
 
-  useEffect(() => { refresh().catch(() => setNotice("Start the backend on port 8000.")); }, []);
+  useEffect(() => {
+    refresh().catch(() => setNotice("Start the backend on port 8000.")).finally(() => setLoading(false));
+  }, []);
 
   async function approve(a: Approval) {
     setBusyId(a.id); setNotice("");
@@ -46,16 +64,43 @@ export default function ApprovalsPage() {
       {notice && <div className="notice">{notice}</div>}
 
       <div className="rows">
-        {approvals.length === 0 && <div className="empty">Nothing waiting on you right now.</div>}
+        {loading && <div className="empty">Loading approvals…</div>}
+        {!loading && approvals.length === 0 && <div className="empty">Nothing waiting on you right now.</div>}
         {approvals.map((a) => {
           const action = actions[a.action_id];
+          const commitment = action?.commitment_id ? commitments[action.commitment_id] : undefined;
+          const payloadEntries = action ? Object.entries(action.payload) : [];
           return (
-            <div className="row-card" key={a.id}>
-              <div className="meta">
-                <strong>{action ? action.type.replace(/_/g, " ") : a.action_id}</strong>
-                <small>Requested {new Date(a.requested_at).toLocaleString()}</small>
+            <div className="row-card stacked" key={a.id}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
+                <div className="meta">
+                  <strong>{action ? action.type.replace(/_/g, " ") : a.action_id}</strong>
+                  <small>
+                    {commitment ? commitment.title : "Unknown commitment"} · Requested{" "}
+                    {new Date(a.requested_at).toLocaleString()}
+                  </small>
+                </div>
+                <span className={`pill ${a.status}`}>{a.status}</span>
               </div>
-              <span className={`pill ${a.status}`}>{a.status}</span>
+
+              {commitment?.description && (
+                <div className="quote">
+                  <span>Commitment</span>
+                  <p>&ldquo;{commitment.description}&rdquo;</p>
+                </div>
+              )}
+
+              {payloadEntries.length > 0 && (
+                <div className="steps-detail">
+                  {payloadEntries.map(([key, value]) => (
+                    <div className="step-row" key={key}>
+                      <span>{formatPayloadKey(key)}</span>
+                      <span>{formatPayloadValue(value)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="row-actions">
                 <button className="ghost" disabled={busyId === a.id} onClick={() => reject(a)}>Reject</button>
                 <button disabled={busyId === a.id} onClick={() => approve(a)}>Approve & execute</button>

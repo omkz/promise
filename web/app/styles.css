@@ -30,6 +30,10 @@ button { cursor:pointer; }
 .connect-form button { margin-top:0; }
 .steps-detail { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
 .steps-detail .step-row { display:flex; justify-content:space-between; gap:12px; padding:10px 12px; background:#fbfbfd; border:1px solid var(--line); border-radius:12px; font-size:13px; }
+.row-card.stacked { flex-direction:column; align-items:stretch; }
+.row-card.stacked .row-actions { justify-content:flex-end; }
+.section-head { margin:34px 0 14px; }
+.section-head h2 { font-size:20px; letter-spacing:-.02em; margin:0; }
 .hero { display:grid; grid-template-columns:1.2fr .8fr; gap:22px; align-items:stretch; margin:46px 0 24px; }
 .eyebrow { color:var(--muted); letter-spacing:.16em; font-size:11px; font-weight:800; margin:0 0 10px; }
 h1 { font-size:clamp(42px, 6vw, 76px); line-height:.96; letter-spacing:-.055em; margin:0; max-width:700px; }
