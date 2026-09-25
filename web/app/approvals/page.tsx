@@ -6,16 +6,7 @@ import {
   decideApproval, executeAction, getCommitments, listActions, listPendingApprovals,
   type Action, type Approval, type Commitment,
 } from "../../lib/api";
-
-function formatPayloadKey(key: string): string {
-  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function formatPayloadValue(value: unknown): string {
-  if (Array.isArray(value)) return value.length ? value.join(", ") : "—";
-  if (value === null || value === undefined || value === "") return "—";
-  return String(value);
-}
+import { formatPayloadKey, formatPayloadValue } from "../../lib/format";
 
 export default function ApprovalsPage() {
   const [approvals, setApprovals] = useState<Approval[]>([]);

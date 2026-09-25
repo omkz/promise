@@ -49,9 +49,12 @@ export type HandleResult = {
   agent_run: AgentRun;
   commitment: Commitment;
   contact: Contact | null;
-  document: Document;
+  // Not every planner produces a document/draft (e.g. a meeting commitment proposes a
+  // CREATE_CALENDAR_EVENT action, not an outbound message) -- see
+  // AgentOrchestrator.run_handle_commitment's own docstring on this same `.get(...)` shape.
+  document: Document | null;
   changes: string[];
-  draft: Draft;
+  draft: Draft | null;
   action: Action;
   approval: Approval;
 };

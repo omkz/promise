@@ -11,13 +11,9 @@ import {
   type Commitment,
   type HandleResult,
 } from "../lib/api";
+import { formatDateTime, formatPayloadKey, formatPayloadValue } from "../lib/format";
 
 const example = "I'll send Andi the revised proposal tomorrow morning.";
-
-function formatDue(value: string | null) {
-  if (!value) return "No deadline";
-  return new Date(value).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
 
 export default function Home() {
   const [commitments, setCommitments] = useState<Commitment[]>([]);
@@ -25,13 +21,16 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [agent, setAgent] = useState<HandleResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
 
   async function refresh() {
     setCommitments(await getCommitments());
   }
 
-  useEffect(() => { refresh().catch(() => setNotice("Start the backend on port 8000.")); }, []);
+  useEffect(() => {
+    refresh().catch(() => setNotice("Start the backend on port 8000.")).finally(() => setLoading(false));
+  }, []);
 
   async function detect() {
     if (!input.trim()) return;
@@ -62,7 +61,7 @@ export default function Home() {
     try {
       await decideApproval(agent.approval.id, "approved");
       await executeAction(agent.action.id);
-      setNotice("Approved and sent. Commitment completed.");
+      setNotice(agent.draft ? "Approved and sent. Commitment completed." : "Approved and executed. Commitment completed.");
       setAgent(null); setSelected(null); await refresh();
     } catch (e) { setNotice(e instanceof Error ? e.message : "Execution failed"); }
     finally { setBusy(false); }
@@ -113,10 +112,11 @@ export default function Home() {
               <button key={c.id} className={`commitment ${selected?.id === c.id ? "selected" : ""}`} onClick={() => { setSelected(c); setAgent(null); }}>
                 <span className={`priority ${c.priority}`} />
                 <span className="commitment-copy"><strong>{c.title}</strong><small>{c.description}</small></span>
-                <span className="due">{formatDue(c.due_at)}</span>
+                <span className="due">{formatDateTime(c.due_at)}</span>
               </button>
             ))}
-            {open.length === 0 && <div className="empty">No open commitments yet.</div>}
+            {loading && <div className="empty">Loading commitments…</div>}
+            {!loading && open.length === 0 && <div className="empty">No open commitments yet.</div>}
           </div>
         </div>
 
@@ -128,7 +128,7 @@ export default function Home() {
               <p className="eyebrow">COMMITMENT DETAIL</p>
               <h2>{selected.title}</h2>
               <div className="detail-grid">
-                <div><span>Due</span><strong>{formatDue(selected.due_at)}</strong></div>
+                <div><span>Due</span><strong>{formatDateTime(selected.due_at)}</strong></div>
                 <div><span>Status</span><strong>{selected.status}</strong></div>
                 <div><span>Priority</span><strong>{selected.priority}</strong></div>
                 <div><span>Confidence</span><strong>{Math.round(selected.confidence * 100)}%</strong></div>
@@ -140,15 +140,31 @@ export default function Home() {
             <>
               <p className="eyebrow">AGENT EXECUTION — WAITING FOR APPROVAL</p>
               <h2>Ready for your approval.</h2>
-              <div className="steps">
-                <div className="step done">✓ Found {agent.document.name}</div>
-                {agent.changes.map((x) => <div className="step done" key={x}>✓ {x}</div>)}
-                <div className="step done">✓ Draft prepared for {agent.draft.recipient}</div>
-              </div>
-              <div className="draft"><span>MESSAGE</span><pre>{agent.draft.body}</pre></div>
+              {agent.document && agent.draft ? (
+                // SendMessage/SendExistingDocument planners: a real document + outbound draft.
+                <>
+                  <div className="steps">
+                    <div className="step done">✓ Found {agent.document.name}</div>
+                    {agent.changes.map((x) => <div className="step done" key={x}>✓ {x}</div>)}
+                    <div className="step done">✓ Draft prepared for {agent.draft.recipient}</div>
+                  </div>
+                  <div className="draft"><span>MESSAGE</span><pre>{agent.draft.body}</pre></div>
+                </>
+              ) : (
+                // Other planners (e.g. CreateCalendarEventPlanner) don't produce a document/draft --
+                // show the proposed action's own payload generically instead.
+                <div className="steps-detail">
+                  {Object.entries(agent.action.payload).map(([key, value]) => (
+                    <div className="step-row" key={key}>
+                      <span>{formatPayloadKey(key)}</span>
+                      <span>{formatPayloadValue(value)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="actions">
                 <button className="ghost" onClick={reject} disabled={busy}>Reject</button>
-                <button onClick={approveAndExecute} disabled={busy}>Approve & send</button>
+                <button onClick={approveAndExecute} disabled={busy}>{agent.draft ? "Approve & send" : "Approve"}</button>
               </div>
             </>
           )}
