@@ -58,12 +58,29 @@ class Contact(BaseModel):
 
 
 class Document(BaseModel):
+    """Two separate concerns live on this one row, deliberately: `content_text`
+    (extracted text, for retrieval/AI/search — always present) and the binary
+    artifact (the actual downloadable/attachable file — present only when
+    `storage_key` is set). `name`/`type` double as the artifact's filename/
+    content-type when one exists, so no separate `artifact_filename`/
+    `artifact_content_type` fields were needed.
+
+    `storage_key` is a pointer into a `DocumentBlobStore`
+    (`packages/shared/promise_shared/blobs/`, keyed via `blob_ref(workspace_id,
+    id)`) — never the bytes themselves, and never stored in DynamoDB/local
+    JSON. `None` means this document has no binary artifact at all (e.g. it
+    was only ever extracted text) — callers that need one (Gmail attachments)
+    must treat that as `DocumentArtifactMissing`, never fall back to
+    `content_text` as a stand-in.
+    """
+
     id: str
     workspace_id: str
     name: str
     type: str
     content_text: str
     storage_key: str | None = None
+    artifact_size_bytes: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=iso_now)
     updated_at: str = Field(default_factory=iso_now)

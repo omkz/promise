@@ -19,7 +19,7 @@ from promise_domain.models import (
     Document,
     IntegrationAccount,
 )
-from promise_shared.errors import NotFoundError, VerifiedContactRequiredError, WorkspaceAccessError
+from promise_shared.errors import DocumentArtifactMissing, NotFoundError, VerifiedContactRequiredError, WorkspaceAccessError
 from promise_shared.ids import new_id
 
 from .bootstrap import AppContext
@@ -194,6 +194,27 @@ def get_file(ctx: AppContext, *, workspace_id: str, file_id: str) -> dict[str, A
     if file is None:
         raise NotFoundError("document", file_id)
     return file
+
+
+def get_document_artifact(ctx: AppContext, *, workspace_id: str, document_id: str) -> dict[str, Any]:
+    """The *binary* artifact for a `Document` (see that model's own docstring for
+    why this is distinct from `content_text`) -- download/attachment use, never
+    retrieval/search (`get_file` above covers that). Ownership: `Document` is a
+    workspace-shared resource, the same as `Contact`/`get_file` -- not a
+    per-user one (it has no `user_id` field, deliberately not added just to
+    make this check possible; see the README's "Resource ownership" section) --
+    so `ctx.repos.documents.require(workspace_id, ...)` is already the full
+    ownership check, exactly like every other workspace-scoped lookup.
+    A document with no binary artifact at all (`storage_key` unset) or one
+    whose artifact is missing from the blob store raises `DocumentArtifactMissing`
+    -- never a fabricated/empty response."""
+    document = ctx.repos.documents.require(workspace_id, document_id)
+    if not document.storage_key:
+        raise DocumentArtifactMissing(document_id)
+    blob = ctx.blob_store.get(document.storage_key)
+    if blob is None:
+        raise DocumentArtifactMissing(document_id)
+    return {"data": blob.data, "content_type": blob.content_type, "filename": blob.filename, "size_bytes": blob.size_bytes}
 
 
 def search_messages(ctx: AppContext, *, workspace_id: str, user_id: str, query: str) -> list[dict[str, Any]]:

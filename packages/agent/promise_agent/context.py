@@ -18,6 +18,7 @@ from promise_domain.models import (
 from promise_domain.repository import Repository
 from promise_integrations.base import IntegrationProvider
 from promise_integrations.registry import IntegrationRegistry
+from promise_shared.blobs import DocumentBlobStore
 
 
 @dataclass
@@ -50,3 +51,7 @@ class AgentRepos:
     # and execution (steps/execution.py, choosing who actually sends). See
     # IntegrationRegistry.resolve_for_user.
     integration_registry: IntegrationRegistry
+    # Binary document artifacts (distinct from `documents`, which is metadata/extracted-
+    # text only) -- written by the revision planner, read back by the Gmail provider.
+    # See promise_shared.blobs.
+    blob_store: DocumentBlobStore

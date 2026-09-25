@@ -26,6 +26,13 @@ DEFAULT_SCOPES: tuple[str, ...] = (
 
 DEFAULT_STATE_TTL_SECONDS = 600
 
+# Gmail's own documented `messages.send` limit is 25 MB total message size (which the raw,
+# base64-encoded RFC 2822 message -- headers, body, and attachment together -- must fit
+# under): https://developers.google.com/gmail/api/guides/sending. This is checked against
+# the *attachment's own* raw byte size before it's ever base64-encoded, as a conservative,
+# fail-fast bound -- not an attempt to model the encoded message's exact final size.
+DEFAULT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class GmailConfig:
@@ -34,6 +41,7 @@ class GmailConfig:
     redirect_uri: str
     scopes: tuple[str, ...]
     state_ttl_seconds: int
+    max_attachment_bytes: int = DEFAULT_MAX_ATTACHMENT_BYTES
 
 
 class GmailNotConfigured(RuntimeError):
@@ -64,4 +72,5 @@ def load_gmail_config() -> GmailConfig:
         redirect_uri=redirect_uri,
         scopes=scopes,
         state_ttl_seconds=int(os.getenv("GOOGLE_OAUTH_STATE_TTL", str(DEFAULT_STATE_TTL_SECONDS))),
+        max_attachment_bytes=int(os.getenv("GMAIL_MAX_ATTACHMENT_BYTES", str(DEFAULT_MAX_ATTACHMENT_BYTES))),
     )

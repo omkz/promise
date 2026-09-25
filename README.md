@@ -453,6 +453,8 @@ STORAGE_BACKEND=dynamodb
 AWS_REGION=us-east-1
 DYNAMODB_TABLE=PROMISE
 S3_BUCKET=promise-documents
+BLOB_STORE_BACKEND=s3          # document binary artifacts -- see "Document storage" below
+SECRET_STORE_BACKEND=aws       # OAuth tokens -- see "Gmail Integration" below
 BEDROCK_ENABLED=true
 ```
 
@@ -623,14 +625,57 @@ always calls the *default* local provider's `create_draft`, never Gmail's).
    When the `Draft` carries `attachment_document_id` (the planner's revised document; see
    `send_message_planner.py`), `build_raw_send_message`
    (`packages/integrations/promise_integrations/gmail/mime.py`) builds a `multipart/mixed`
-   message — a `text/plain` body part plus the document's own `content_text` as an attachment
+   message — a `text/plain` body part plus the document's **binary artifact** as an attachment
    part (filename = `Document.name`, content type = `Document.type`, base64
-   content-transfer-encoded) — instead of a plain `text/plain` message; no attachment means no
-   change from before. The document loaded is always the exact one the draft itself already
+   content-transfer-encoded, non-ASCII filenames RFC 2231-encoded automatically by Python's
+   `email` package) — instead of a plain `text/plain` message; no attachment means no change
+   from before. The document loaded is always the exact one the draft itself already
    references, never a caller-supplied id — `GmailIntegrationProvider.send_message` has no
-   argument surface for reading an arbitrary document. Still text content only, since PROMISE
-   doesn't store binary document bytes in v1 (see "Known limitations" — `storage_key`/S3 wiring
-   isn't implemented yet).
+   argument surface for reading an arbitrary document. **Never `Document.content_text`**: see
+   "Document storage" below for why extracted text and the binary artifact are two separate
+   things, and `DocumentArtifactMissing`/`AttachmentTooLarge` for the two ways attaching one
+   fails safely instead of silently sending something wrong.
+
+**Document storage**: a `Document` row carries two separate concerns, deliberately.
+   `content_text` is *extracted* text — always present, used for retrieval/AI/search
+   (`ContextRetriever`, `llm.revise_document`) — and is never what gets attached to an email.
+   The binary artifact (the actual downloadable/attachable file) is separate: `storage_key`
+   (reused, not a new field — see `Document`'s own docstring) is a pointer into a
+   `DocumentBlobStore` (`packages/shared/promise_shared/blobs/`), keyed via
+   `blob_ref(workspace_id, document_id)` so a reference always carries its own workspace
+   scoping and one workspace's artifact can never collide with another's. `None` means no
+   artifact exists (e.g. a text-only document) — `artifact_size_bytes` and the existing
+   `name`/`type` fields double as the artifact's own size/filename/content-type when one does,
+   so no separate `artifact_filename`/`artifact_content_type` fields were needed.
+   `LocalBlobStore` (dev/test — `BLOB_STORE_BACKEND=local`, the default) stores one directory
+   per reference under `LOCAL_DOCUMENTS_DIR`, named by a hash of the reference (never the
+   reference/filename verbatim — path traversal is structurally impossible, not just
+   validated against). `S3BlobStore` (production — `BLOB_STORE_BACKEND=s3`) is the same
+   interface against `S3_BUCKET`, private objects only, no bucket/region/key hard-coded.
+   DynamoDB/local JSON only ever stores the `storage_key` pointer and size, never the bytes.
+
+   When `send_message_planner.py` revises a document, it generates a **real** binary artifact
+   matching the source format — a real DOCX via `python-docx`
+   (`packages/agent/promise_agent/action_planning/document_artifacts.py`) when the source is
+   DOCX (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`; the seeded
+   demo proposal is one), or the revised text's own UTF-8 bytes under its own real content type
+   otherwise — text content already *is* its own valid binary representation, so that's not a
+   workaround; it never labels plain text as DOCX/PDF, and never writes text into a file with a
+   misleading extension. `GmailIntegrationProvider.send_message` loads the artifact through
+   `DocumentBlobStore` and refuses, rather than substitutes, when something's wrong: no artifact
+   at all raises `DocumentArtifactMissing` (never a silent fall back to `content_text`); an
+   artifact over `GMAIL_MAX_ATTACHMENT_BYTES` (default 25 MiB — Gmail's own documented
+   `messages.send` limit) raises `AttachmentTooLarge` before any MIME message is built or Gmail
+   is called at all. A development-only download route exists too:
+   `GET /api/documents/{document_id}/artifact` (`tools.get_document_artifact`) — workspace-scoped
+   the same way `get_file` is (`Document` has no per-user ownership; see "Resource ownership"
+   above), never exposing a raw storage key/path to the client.
+
+   Supported artifact formats today: DOCX (generated) and plain text (always, as the
+   fallback/default). PDF generation is not implemented — the Gmail attachment pipeline itself
+   (MIME building, blob storage, size limits) is format-agnostic and handles any binary content
+   correctly regardless of format (see `tests/test_gmail_mime_fixtures.py`, which proves this
+   against a real minimal PDF fixture), but nothing in the revision engine *produces* a PDF yet.
 
 **9. Current limitation**: v1 always searches Gmail live, per request — there is no mailbox
    sync/indexing subsystem, and nothing about a connected mailbox is copied into
@@ -645,12 +690,14 @@ always calls the *default* local provider's `create_draft`, never Gmail's).
    is exactly the seam it would plug into, with no changes to `ContextRetriever` or its callers,
    the same way Gmail itself plugged in.
 
-**Try it**: `uv run pytest tests/test_gmail_mime.py tests/test_gmail_oauth_client.py
-tests/test_gmail_provider.py tests/test_gmail_mock_provider.py tests/test_gmail_oauth_flow.py
-tests/test_gmail_oauth_routes.py tests/test_gmail_context_retrieval.py
-tests/test_gmail_authorization.py tests/test_gmail_approval_flow.py tests/test_secret_store.py`
-— `httpx.MockTransport`-backed fakes for every Google HTTP call, no live network or real
-Google/AWS credentials required.
+**Try it**: `uv run pytest tests/test_gmail_mime.py tests/test_gmail_mime_fixtures.py
+tests/test_gmail_oauth_client.py tests/test_gmail_provider.py tests/test_gmail_mock_provider.py
+tests/test_gmail_oauth_flow.py tests/test_gmail_oauth_routes.py tests/test_gmail_context_retrieval.py
+tests/test_gmail_authorization.py tests/test_gmail_approval_flow.py tests/test_secret_store.py
+tests/test_document_blob_store.py tests/test_document_artifact.py`
+— `httpx.MockTransport`-backed fakes for every Google HTTP call, a hand-written fake S3 client
+for `S3BlobStore`, and real (fixture) `.docx`/`.pdf` binaries under `tests/fixtures/` — no live
+network or real Google/AWS credentials required.
 
 ## Known limitations / next steps
 
@@ -670,6 +717,11 @@ Google/AWS credentials required.
 - `IntegrationAccount.secret_ref` now points into a real `SecretStore` (local file store for
   dev/test, AWS Secrets Manager in production — see "Gmail Integration" point 6) for Gmail.
   Other future providers' credentials would use the same seam.
+- `Document.storage_key` now points into a real `DocumentBlobStore` (local filesystem for
+  dev/test, S3 in production — see "Document storage" above). Only DOCX and plain text have a
+  real artifact *generator* (`document_artifacts.py`); PDF generation isn't implemented, even
+  though the attachment/blob-storage pipeline itself already handles PDF (or any other binary
+  format) correctly once bytes exist for it — see that section's own note.
 - Context retrieval (`packages/agent/promise_agent/context_retrieval/`) is v1: deterministic
   lexical/keyword + metadata ranking, no semantic/vector search yet. The `ContextSearchProvider`
   and `RankingStrategy` seams are shaped for that to be a later addition without

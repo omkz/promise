@@ -36,7 +36,8 @@ def _config() -> GmailConfig:
 def _provider(ctx, handler) -> GmailIntegrationProvider:
     return GmailIntegrationProvider(
         account_id=ACCOUNT_ID, workspace_id=WORKSPACE, secret_ref=SECRET_REF, secret_store=ctx.secret_store,
-        config=_config(), drafts=ctx.repos.drafts, documents=ctx.repos.documents, transport=httpx.MockTransport(handler),
+        config=_config(), drafts=ctx.repos.drafts, documents=ctx.repos.documents, blob_store=ctx.blob_store,
+        transport=httpx.MockTransport(handler),
     )
 
 
@@ -58,11 +59,32 @@ def _make_draft(ctx, *, recipient="andi@example.com", subject="Revised proposal"
     return draft
 
 
-def _make_document(ctx, *, name="proposal_revised.txt", content_type="text/plain", content_text="Revised proposal content."):
+def _make_document(
+    ctx, *, name="proposal_revised.txt", content_type="text/plain", content_text="Revised proposal content.",
+    artifact_bytes=None, with_artifact=True,
+):
+    """`content_text` (extracted text) and the binary artifact are deliberately
+    independent here, the same way the real revision planner keeps them
+    separate -- most tests give them the same content only for simplicity,
+    but `test_send_message_attaches_binary_artifact_not_extracted_text` below
+    gives them different content specifically to prove which one gets sent."""
     from promise_domain.models import Document
+    from promise_shared.blobs import blob_ref
     from promise_shared.ids import new_id
 
-    document = Document(id=new_id("doc"), workspace_id=WORKSPACE, name=name, type=content_type, content_text=content_text)
+    document_id = new_id("doc")
+    storage_key = None
+    artifact_size = None
+    if with_artifact:
+        data = artifact_bytes if artifact_bytes is not None else content_text.encode("utf-8")
+        storage_key = blob_ref(WORKSPACE, document_id)
+        ctx.blob_store.put(storage_key, data, content_type=content_type, filename=name)
+        artifact_size = len(data)
+
+    document = Document(
+        id=document_id, workspace_id=WORKSPACE, name=name, type=content_type, content_text=content_text,
+        storage_key=storage_key, artifact_size_bytes=artifact_size,
+    )
     ctx.repos.documents.save(document)
     return document
 
@@ -321,6 +343,133 @@ def test_send_message_with_attachment_is_idempotent_when_already_sent(ctx):
 
     result = _provider(ctx, handler).send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
     assert result["idempotent_replay"] is True
+
+
+def test_send_message_attaches_the_binary_artifact_not_extracted_text(ctx):
+    """content_text and the binary artifact are deliberately different here --
+    proves the attachment comes from DocumentBlobStore, never a re-encoding of
+    Document.content_text, even though a naive implementation would produce
+    output that looks superficially right for a plain-text document."""
+    import base64
+    import email
+    import json as _json
+
+    _seed_valid_token(ctx)
+    artifact_bytes = b"\x50\x4b\x03\x04binary-artifact-bytes-not-text"  # arbitrary non-UTF8-safe bytes
+    document = _make_document(
+        ctx, name="proposal_revised.bin", content_type="application/octet-stream",
+        content_text="This is only the extracted text, never sent as the attachment.",
+        artifact_bytes=artifact_bytes,
+    )
+    draft = _make_draft(ctx, attachment_document_id=document.id)
+    sent_requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return httpx.Response(200, json={"id": "gmail_sent_5", "threadId": "gmail_thread_5"})
+
+    _provider(ctx, handler).send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+
+    body = _json.loads(sent_requests[0].content)
+    mime_message = email.message_from_bytes(base64.urlsafe_b64decode(body["raw"].encode("ascii")))
+    _body_part, attachment_part = mime_message.get_payload()
+    assert attachment_part.get_payload(decode=True) == artifact_bytes
+
+
+def test_send_message_with_no_binary_artifact_raises_document_artifact_missing_not_a_fallback(ctx):
+    from promise_shared.errors import DocumentArtifactMissing
+
+    _seed_valid_token(ctx)
+    document = _make_document(ctx, with_artifact=False)  # storage_key is None -- text-only document
+    draft = _make_draft(ctx, attachment_document_id=document.id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must never call Gmail when there is no binary artifact to attach")
+
+    with pytest.raises(DocumentArtifactMissing):
+        _provider(ctx, handler).send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+
+    reloaded = ctx.repos.drafts.require(WORKSPACE, draft.id)
+    assert reloaded.status != DraftStatus.SENT
+
+
+def test_send_message_with_storage_key_but_missing_blob_raises_document_artifact_missing(ctx):
+    """The Document row claims an artifact exists (storage_key set) but the blob
+    store has nothing at that ref -- deleted out from under it, or never
+    actually written. Still never falls back to content_text."""
+    from promise_domain.models import Document
+    from promise_shared.blobs import blob_ref
+    from promise_shared.errors import DocumentArtifactMissing
+    from promise_shared.ids import new_id
+
+    _seed_valid_token(ctx)
+    document_id = new_id("doc")
+    document = Document(
+        id=document_id, workspace_id=WORKSPACE, name="ghost.txt", type="text/plain",
+        content_text="text that must never be sent as a substitute attachment",
+        storage_key=blob_ref(WORKSPACE, document_id), artifact_size_bytes=100,
+    )
+    ctx.repos.documents.save(document)
+    draft = _make_draft(ctx, attachment_document_id=document.id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must never call Gmail when the referenced blob is missing")
+
+    with pytest.raises(DocumentArtifactMissing):
+        _provider(ctx, handler).send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+
+
+def test_send_message_rejects_an_oversized_attachment_before_building_or_sending_mime(ctx):
+    from promise_shared.errors import AttachmentTooLarge
+
+    _seed_valid_token(ctx)
+    document = _make_document(ctx, artifact_bytes=b"x" * 100)
+    draft = _make_draft(ctx, attachment_document_id=document.id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must never call Gmail for a rejected oversized attachment")
+
+    small_config = GmailConfig(
+        client_id="cid", client_secret="csecret", redirect_uri="https://promise.example/callback",
+        scopes=("https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"),
+        state_ttl_seconds=600, max_attachment_bytes=50,
+    )
+    provider = GmailIntegrationProvider(
+        account_id=ACCOUNT_ID, workspace_id=WORKSPACE, secret_ref=SECRET_REF, secret_store=ctx.secret_store,
+        config=small_config, drafts=ctx.repos.drafts, documents=ctx.repos.documents, blob_store=ctx.blob_store,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(AttachmentTooLarge) as excinfo:
+        provider.send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+    assert excinfo.value.size_bytes == 100
+    assert excinfo.value.max_bytes == 50
+
+    reloaded = ctx.repos.drafts.require(WORKSPACE, draft.id)
+    assert reloaded.status != DraftStatus.SENT
+
+
+def test_send_message_attachment_with_international_filename_survives_round_trip(ctx):
+    import base64
+    import email
+    import json as _json
+
+    _seed_valid_token(ctx)
+    document = _make_document(ctx, name="提案_修正版.docx", content_type="application/octet-stream", artifact_bytes=b"fake-docx-bytes")
+    draft = _make_draft(ctx, attachment_document_id=document.id)
+    sent_requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return httpx.Response(200, json={"id": "gmail_sent_6", "threadId": "gmail_thread_6"})
+
+    _provider(ctx, handler).send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+
+    body = _json.loads(sent_requests[0].content)
+    mime_message = email.message_from_bytes(base64.urlsafe_b64decode(body["raw"].encode("ascii")))
+    _body_part, attachment_part = mime_message.get_payload()
+    assert attachment_part.get_filename() == "提案_修正版.docx"
+    assert attachment_part.get_payload(decode=True) == b"fake-docx-bytes"
 
 
 def test_send_message_never_reads_a_document_other_than_the_drafts_own_attachment(ctx):

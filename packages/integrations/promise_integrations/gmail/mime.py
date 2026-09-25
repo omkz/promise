@@ -98,10 +98,12 @@ def normalize_gmail_message(raw: dict[str, Any], *, workspace_id: str) -> dict[s
 class MessageAttachment(TypedDict):
     filename: str
     content_type: str
-    content: str
-    """Text content only -- the only caller, `GmailIntegrationProvider.send_message`,
-    always builds this from `Document.content_text` (PROMISE never stores binary
-    document bytes in v1 -- see `Document`'s own docstring/README "Known limitations")."""
+    content_bytes: bytes
+    """The exact binary artifact bytes -- never `Document.content_text` (extracted
+    text) re-encoded. `GmailIntegrationProvider.send_message` loads these from
+    `DocumentBlobStore`, the same bytes a human would get by downloading the
+    document; this function never re-derives or transforms them, only wraps
+    them in a MIME part."""
 
 
 def build_raw_send_message(
@@ -116,8 +118,14 @@ def build_raw_send_message(
     attachments existed). With one: `multipart/mixed` -- a `text/plain` body
     part plus one attachment part, base64 content-transfer-encoded, with a
     `Content-Disposition: attachment; filename=...` header carrying the
-    document's own name. Never Gmail's own Draft API, never SMTP -- this is
-    only ever handed to `messages.send`'s `raw` field.
+    document's own name (Python's `email` package RFC 2231-encodes this
+    automatically when the filename isn't pure ASCII -- no special handling
+    needed here, only round-trip test coverage). Attachment bytes are written
+    to the MIME part exactly as given -- `encode_base64` is the only transform
+    applied, and it's reversible (Gmail/any MIME reader decodes it back to the
+    identical bytes); this function never touches text encoding for binary
+    content. Never Gmail's own Draft API, never SMTP -- this is only ever
+    handed to `messages.send`'s `raw` field.
     """
     message: MIMEText | MIMEMultipart
     if attachment is None:
@@ -129,7 +137,7 @@ def build_raw_send_message(
         content_type = attachment["content_type"] or "application/octet-stream"
         maintype, _, subtype = content_type.partition("/")
         part = MIMEBase(maintype or "application", subtype or "octet-stream")
-        part.set_payload(attachment["content"].encode("utf-8"))
+        part.set_payload(attachment["content_bytes"])
         encode_base64(part)
         part.add_header("Content-Disposition", "attachment", filename=attachment["filename"])
         message.attach(part)

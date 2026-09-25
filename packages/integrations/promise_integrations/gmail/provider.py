@@ -7,8 +7,11 @@ import httpx
 from promise_domain.enums import DraftStatus
 from promise_domain.models import Document, Draft
 from promise_domain.repository import Repository
+from promise_shared.blobs import DocumentBlobStore
 from promise_shared.clock import iso_now
 from promise_shared.errors import (
+    AttachmentTooLarge,
+    DocumentArtifactMissing,
     IntegrationAuthorizationRevoked,
     IntegrationInvalidRequest,
     IntegrationNotConnected,
@@ -68,7 +71,7 @@ class GmailIntegrationProvider:
     def __init__(
         self, *, account_id: str, workspace_id: str, secret_ref: str, secret_store: SecretStore,
         config: GmailConfig, drafts: Repository[Draft], documents: Repository[Document],
-        transport: httpx.BaseTransport | None = None,
+        blob_store: DocumentBlobStore, transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._account_id = account_id
         self._workspace_id = workspace_id
@@ -76,6 +79,8 @@ class GmailIntegrationProvider:
         self._secret_store = secret_store
         self._drafts = drafts
         self._documents = documents
+        self._blob_store = blob_store
+        self._max_attachment_bytes = config.max_attachment_bytes
         self._oauth = GoogleOAuthClient(config, transport=transport)
         self._http = httpx.Client(transport=transport, timeout=10.0)
 
@@ -167,8 +172,15 @@ class GmailIntegrationProvider:
         always the *one* id the draft itself already carries (set only by
         PROMISE's own planner when the draft was created, never by a caller
         of this method) -- there is no argument surface here for reading an
-        arbitrary document. Missing means `NotFoundError` (via `.require`),
-        never a silently attachment-less send of a message that asked for one.
+        arbitrary document, so a User A draft can never end up attaching a
+        User B/other-workspace document. The exact binary artifact bytes come
+        from `self._blob_store` (via `Document.storage_key`) -- **never**
+        `Document.content_text` (extracted text), even when a binary artifact
+        exists but happens to be missing from the store: that raises
+        `DocumentArtifactMissing`, never a silent fall back to text. Oversized
+        artifacts (`config.max_attachment_bytes`, see `GmailConfig`) raise
+        `AttachmentTooLarge` before any MIME message is built or Gmail is
+        called at all.
         """
         draft = self._drafts.require(workspace_id, draft_id)
         if draft.status == DraftStatus.SENT:
@@ -177,7 +189,14 @@ class GmailIntegrationProvider:
         attachment = None
         if draft.attachment_document_id:
             document = self._documents.require(workspace_id, draft.attachment_document_id)
-            attachment = {"filename": document.name, "content_type": document.type or "text/plain", "content": document.content_text}
+            if not document.storage_key:
+                raise DocumentArtifactMissing(document.id)
+            blob = self._blob_store.get(document.storage_key)
+            if blob is None:
+                raise DocumentArtifactMissing(document.id)
+            if blob.size_bytes > self._max_attachment_bytes:
+                raise AttachmentTooLarge(document.id, size_bytes=blob.size_bytes, max_bytes=self._max_attachment_bytes)
+            attachment = {"filename": blob.filename, "content_type": blob.content_type, "content_bytes": blob.data}
 
         raw = build_raw_send_message(to=draft.recipient, subject=draft.subject, body=draft.body, attachment=attachment)
         resp = self._request("POST", "/users/me/messages/send", json={"raw": raw})

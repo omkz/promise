@@ -236,3 +236,33 @@ class IntegrationInvalidRequest(IntegrationError):
 
     def __init__(self, provider_name: str, detail: str) -> None:
         super().__init__(provider_name, detail)
+
+
+# ---- document binary artifacts (packages/shared/promise_shared/blobs) --------------------------
+
+
+class DocumentArtifactMissing(PromiseError):
+    """A `Document` was referenced for its *binary artifact* (e.g. a Gmail attachment) but no
+    artifact exists for it — either `Document.storage_key` is unset (a text-only document, or
+    one whose artifact was never generated) or the `DocumentBlobStore` has nothing at that
+    reference (deleted out from under it, or never actually written). Never a reason to fall
+    back to `Document.content_text` as a stand-in attachment — see
+    `GmailIntegrationProvider.send_message`. Maps to HTTP 409 (well-formed request, missing
+    prerequisite state)."""
+
+    def __init__(self, document_id: str) -> None:
+        super().__init__(f"document '{document_id}' has no binary artifact available")
+        self.document_id = document_id
+
+
+class AttachmentTooLarge(PromiseError):
+    """A document's binary artifact exceeds the configured maximum attachment size
+    (`GMAIL_MAX_ATTACHMENT_BYTES`, default 25 MiB — Gmail's own documented `messages.send`
+    limit). Raised before any MIME message is built or sent — never a partially-built or
+    truncated message. Maps to HTTP 413."""
+
+    def __init__(self, document_id: str, *, size_bytes: int, max_bytes: int) -> None:
+        super().__init__(f"document '{document_id}' artifact is {size_bytes} bytes, over the {max_bytes}-byte limit")
+        self.document_id = document_id
+        self.size_bytes = size_bytes
+        self.max_bytes = max_bytes

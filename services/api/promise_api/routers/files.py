@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import Response
 from promise_app import tools
 from promise_app.bootstrap import AppContext
 from promise_auth import AuthenticatedPrincipal, Permission, require
@@ -27,6 +28,26 @@ def get_file(
 ) -> dict[str, Any]:
     require(principal, Permission.CONTEXT_READ)
     return tools.get_file(ctx, workspace_id=principal.workspace_id, file_id=file_id)
+
+
+@router.get("/documents/{document_id}/artifact")
+def get_document_artifact(
+    document_id: str, principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
+) -> Response:
+    """Downloads a `Document`'s binary artifact (never its `content_text`) --
+    a development/debugging route, not a full production download surface
+    (no range requests, no signed/expiring URLs). Workspace-scoped exactly
+    like `get_file` (`Document` has no per-user ownership -- see
+    `tools.get_document_artifact`'s own docstring); never exposes a raw
+    storage key/path, only the bytes and their own metadata."""
+    require(principal, Permission.CONTEXT_READ)
+    artifact = tools.get_document_artifact(ctx, workspace_id=principal.workspace_id, document_id=document_id)
+    safe_filename = artifact["filename"].replace('"', "'")
+    return Response(
+        content=artifact["data"],
+        media_type=artifact["content_type"],
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
 
 
 @router.get("/messages")

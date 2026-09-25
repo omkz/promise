@@ -5,6 +5,7 @@ from typing import Any
 
 from promise_domain.enums import ActionStatus, ActionType
 from promise_domain.models import Action, Commitment, Contact, Document
+from promise_shared.blobs import blob_ref
 from promise_shared.errors import VerifiedContactRequiredError
 from promise_shared.ids import new_id
 
@@ -12,6 +13,7 @@ from .. import llm
 from ..context import AgentRepos
 from ..context_retrieval import ContextItem, ContextItemType
 from . import _signals
+from .document_artifacts import generate_revised_artifact
 from .message_composer import DeterministicMessageComposer, MessageComposer
 from .planner import PlanningError
 from .schema import ActionPlan
@@ -77,12 +79,33 @@ class SendRevisedDocumentPlanner:
         # Full content is loaded here, only for the items actually selected — everything
         # upstream of this (ranking, filtering) worked off small ContextItem snippets only.
         revised_text, changes = llm.revise_document(source_doc.get("content_text", ""), feedback)
+
+        # Two separate concerns, deliberately: `revised_text` (extracted text, for
+        # retrieval/AI/search — persisted as `content_text` below) and the binary
+        # artifact (the actual downloadable/attachable file). `generate_revised_artifact`
+        # produces a real, valid artifact matching the source document's own format
+        # (a real DOCX via python-docx for a DOCX source; the revised text's own UTF-8
+        # bytes, under its own real content type, otherwise) — never plain text renamed
+        # with a misleading extension. The artifact is written to the blob store keyed
+        # by the document's own id (`blob_ref`) before the `Document` row is saved, so
+        # `storage_key`/`artifact_size_bytes` are correct from the first write, never a
+        # separate update after the fact.
+        document_id = new_id("doc")
+        artifact_bytes, artifact_content_type = generate_revised_artifact(
+            source_type=source_doc.get("type", "text/plain"), revised_text=revised_text
+        )
+        storage_key = blob_ref(commitment.workspace_id, document_id)
+        revised_doc_name = re.sub(r"(\.[^.]+)$", r"_revised\1", source_doc["name"])
+        repos.blob_store.put(storage_key, artifact_bytes, content_type=artifact_content_type, filename=revised_doc_name)
+
         revised_doc = Document(
-            id=new_id("doc"),
+            id=document_id,
             workspace_id=commitment.workspace_id,
-            name=re.sub(r"(\.[^.]+)$", r"_revised\1", source_doc["name"]),
-            type=source_doc.get("type", "text/plain"),
+            name=revised_doc_name,
+            type=artifact_content_type,
             content_text=revised_text,
+            storage_key=storage_key,
+            artifact_size_bytes=len(artifact_bytes),
             metadata={"derived_from": source_doc["id"], "changes": changes, "agent_generated": True},
         )
         repos.documents.save(revised_doc)

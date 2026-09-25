@@ -55,8 +55,11 @@
       already correct is left alone, so re-running after a partial failure (or just as a
       periodic safety net) only touches what's still wrong.
 
-2. Create an S3 bucket for document objects and set `S3_BUCKET`. (Document storage-key wiring
-   to S3 is not implemented yet — see README "Known limitations".)
+2. Create an S3 bucket for document binary artifacts and set `S3_BUCKET` + `BLOB_STORE_BACKEND=s3`
+   (`S3_DOCUMENTS_PREFIX`, default `documents/`, is optional). Keep it private -- `S3BlobStore`
+   (`packages/shared/promise_shared/blobs/s3_blob_store.py`) never sets a public-read ACL, and
+   nothing else in this repository needs to be able to reach it directly. See the root README's
+   "Document storage" section (under "Gmail Integration") for the full design.
 3. Use Amazon Bedrock for model-assisted revision. Keep `BEDROCK_ENABLED=false` for
    deterministic local/dev/CI runs; set it to `true` plus `BEDROCK_MODEL_ID`/`AWS_REGION` in
    deployed environments.

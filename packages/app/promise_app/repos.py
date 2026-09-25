@@ -23,6 +23,7 @@ from promise_domain.models import (
 )
 from promise_domain.repository import Repository
 from promise_integrations.registry import IntegrationRegistry
+from promise_shared.blobs import DocumentBlobStore
 from promise_shared.store import USER_OWNED_INDEX, EntityStore
 
 # See `OAuthState`'s own docstring: every state row lives in this one reserved
@@ -98,7 +99,7 @@ def build_repo_set(store: EntityStore) -> RepoSet:
     )
 
 
-def build_agent_repos(repos: RepoSet, integrations: IntegrationRegistry) -> AgentRepos:
+def build_agent_repos(repos: RepoSet, integrations: IntegrationRegistry, blob_store: DocumentBlobStore) -> AgentRepos:
     return AgentRepos(
         commitments=repos.commitments,
         sources=repos.sources,
@@ -113,4 +114,5 @@ def build_agent_repos(repos: RepoSet, integrations: IntegrationRegistry) -> Agen
         audit_events=repos.audit_events,
         integration=integrations.get(),
         integration_registry=integrations,
+        blob_store=blob_store,
     )

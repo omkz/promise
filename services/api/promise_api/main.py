@@ -13,8 +13,10 @@ from promise_app.bootstrap import AppContext
 from promise_integrations.gmail import GmailNotConfigured
 from promise_shared.errors import (
     ApprovalRequiredError,
+    AttachmentTooLarge,
     AuthenticationRequired,
     ConflictError,
+    DocumentArtifactMissing,
     DuplicateActionError,
     ExtractionProviderError,
     InsufficientScope,
@@ -165,6 +167,19 @@ def _integration_unavailable(_: Request, exc: IntegrationUnavailable) -> JSONRes
 @app.exception_handler(IntegrationInvalidRequest)
 def _integration_invalid_request(_: Request, exc: IntegrationInvalidRequest) -> JSONResponse:
     return JSONResponse({"error": str(exc), "provider": exc.provider_name}, status_code=400)
+
+
+@app.exception_handler(DocumentArtifactMissing)
+def _document_artifact_missing(_: Request, exc: DocumentArtifactMissing) -> JSONResponse:
+    return JSONResponse({"error": str(exc), "document_id": exc.document_id}, status_code=409)
+
+
+@app.exception_handler(AttachmentTooLarge)
+def _attachment_too_large(_: Request, exc: AttachmentTooLarge) -> JSONResponse:
+    return JSONResponse(
+        {"error": str(exc), "document_id": exc.document_id, "size_bytes": exc.size_bytes, "max_bytes": exc.max_bytes},
+        status_code=413,
+    )
 
 
 @app.exception_handler(GmailNotConfigured)

@@ -116,7 +116,8 @@ def test_full_flow_attaches_the_revised_document_through_real_gmail_provider(see
     )
     ctx.integrations.register_factory("gmail", lambda acct: GmailIntegrationProvider(
         account_id=acct.id, workspace_id=acct.workspace_id, secret_ref=acct.secret_ref, secret_store=ctx.secret_store,
-        config=config, drafts=ctx.repos.drafts, documents=ctx.repos.documents, transport=httpx.MockTransport(handler),
+        config=config, drafts=ctx.repos.drafts, documents=ctx.repos.documents, blob_store=ctx.blob_store,
+        transport=httpx.MockTransport(handler),
     ))
 
     commitment = tools.create_commitment(ctx, workspace_id=ws, user_id=uid, text="I'll send Andi the revised proposal tomorrow morning.")["commitment"]
@@ -136,8 +137,20 @@ def test_full_flow_attaches_the_revised_document_through_real_gmail_provider(see
     assert mime_message.is_multipart()
     _body_part, attachment_part = mime_message.get_payload()
     assert attachment_part.get_filename() == document_name
-    assert attachment_part.get_payload(decode=True).decode("utf-8") == document_content
     assert handled["draft"]["attachment_document_id"] == document_id
+
+    # The seeded demo source document is a real DOCX ("Andi_Proposal_v3.docx") --
+    # the attached bytes must be a genuine, openable DOCX artifact, never
+    # `content_text` renamed with a .docx extension.
+    import io
+
+    import docx
+
+    attachment_bytes = attachment_part.get_payload(decode=True)
+    assert attachment_part.get_content_type() == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    parsed = docx.Document(io.BytesIO(attachment_bytes))
+    reconstructed_text = "\n".join(p.text for p in parsed.paragraphs)
+    assert reconstructed_text == document_content
 
 
 def test_no_gmail_connection_falls_back_to_local_provider_for_send(seeded_ctx):

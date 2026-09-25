@@ -11,6 +11,7 @@ from promise_domain.models import IntegrationAccount, User, Workspace, Workspace
 from promise_integrations.gmail import GmailIntegrationProvider, gmail_enabled, load_gmail_config
 from promise_integrations.local_provider import LocalIntegrationProvider
 from promise_integrations.registry import IntegrationRegistry
+from promise_shared.blobs import DocumentBlobStore, build_blob_store
 from promise_shared.ids import new_id
 from promise_shared.secrets import SecretStore, build_secret_store
 from promise_shared.store import EntityStore, build_store
@@ -32,6 +33,7 @@ class AppContext:
     orchestrator: AgentOrchestrator
     auth_provider: AuthProvider
     secret_store: SecretStore
+    blob_store: DocumentBlobStore
     default_workspace_id: str
     default_user_id: str
 
@@ -91,12 +93,12 @@ def build_auth_provider() -> AuthProvider:
     )
 
 
-def _gmail_provider_factory(repos: RepoSet, secret_store: SecretStore):
+def _gmail_provider_factory(repos: RepoSet, secret_store: SecretStore, blob_store: DocumentBlobStore):
     """Closure, not a method: `IntegrationRegistry.resolve_for_user` calls this
     with one already-resolved, already-ownership-checked `IntegrationAccount`
     per call, so it only ever needs to close over the (fixed, process-wide)
-    `repos`/`secret_store`, never take them as call-site arguments a caller
-    could get wrong."""
+    `repos`/`secret_store`/`blob_store`, never take them as call-site
+    arguments a caller could get wrong."""
 
     def factory(account: IntegrationAccount):
         from promise_shared.errors import IntegrationNotConnected
@@ -111,27 +113,30 @@ def _gmail_provider_factory(repos: RepoSet, secret_store: SecretStore):
             config=load_gmail_config(),
             drafts=repos.drafts,
             documents=repos.documents,
+            blob_store=blob_store,
         )
 
     return factory
 
 
 def build_context(
-    store: EntityStore | None = None, *, auth_provider: AuthProvider | None = None, secret_store: SecretStore | None = None
+    store: EntityStore | None = None, *, auth_provider: AuthProvider | None = None,
+    secret_store: SecretStore | None = None, blob_store: DocumentBlobStore | None = None,
 ) -> AppContext:
     store = store or build_store()
     repos = build_repo_set(store)
     secret_store = secret_store or build_secret_store()
+    blob_store = blob_store or build_blob_store()
 
     local_provider = LocalIntegrationProvider(repos.documents, repos.messages, repos.drafts)
     # GMAIL_ENABLED=false (the default): no factory registered at all, so
     # resolve_for_user("gmail") always returns None and every Gmail-aware call
     # site behaves exactly as it did before Gmail existed -- zero behavior
     # change for anyone not opting in.
-    provider_factories = {"gmail": _gmail_provider_factory(repos, secret_store)} if gmail_enabled() else {}
+    provider_factories = {"gmail": _gmail_provider_factory(repos, secret_store, blob_store)} if gmail_enabled() else {}
     integrations = IntegrationRegistry(local_provider, integration_accounts=repos.integration_accounts, provider_factories=provider_factories)
 
-    agent_repos = build_agent_repos(repos, integrations)
+    agent_repos = build_agent_repos(repos, integrations, blob_store)
     orchestrator = AgentOrchestrator(agent_repos)
 
     ensure_default_workspace(repos)
@@ -144,6 +149,7 @@ def build_context(
         orchestrator=orchestrator,
         auth_provider=auth_provider or build_auth_provider(),
         secret_store=secret_store,
+        blob_store=blob_store,
         default_workspace_id=DEFAULT_WORKSPACE_ID,
         default_user_id=DEFAULT_USER_ID,
     )
