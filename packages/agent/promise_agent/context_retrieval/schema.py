@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 class ContextItemType(str, Enum):
     DOCUMENT = "document"
     MESSAGE = "message"
+    CALENDAR_EVENT = "calendar_event"
     NOTE = "note"  # reserved for a future integration (e.g. Notion) — not produced by v1 providers
 
 

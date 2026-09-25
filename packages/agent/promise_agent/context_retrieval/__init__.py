@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .providers import ContextSearchProvider, DocumentSearchProvider, MessageSearchProvider, RawContextHit
+from .providers import CalendarSearchProvider, ContextSearchProvider, DocumentSearchProvider, MessageSearchProvider, RawContextHit
 from .query_builder import build_commitment_query
 from .ranking import DeterministicLexicalRanker, RankingStrategy
 from .retriever import ContextRetriever
@@ -15,6 +15,7 @@ from .schema import (
 )
 
 __all__ = [
+    "CalendarSearchProvider",
     "ContextItem",
     "ContextItemType",
     "ContextQuery",

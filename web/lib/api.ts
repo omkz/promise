@@ -110,3 +110,25 @@ export const disconnectIntegration = (id: string) =>
 // Authorization headers -- see services/api/promise_api/routers/integrations.py's
 // gmail_connect docstring. The caller navigates the browser itself once this resolves.
 export const startGmailConnect = () => request<{ authorization_url: string }>(`/api/integrations/gmail/connect`);
+
+// Google Calendar OAuth kickoff -- same reasoning as startGmailConnect above. A separate
+// flow/redirect URI from Gmail's, so connecting Calendar never forces a Gmail reconnect.
+export const startCalendarConnect = () => request<{ authorization_url: string }>(`/api/integrations/calendar/connect`);
+
+export type CalendarEvent = {
+  id: string;
+  summary: string;
+  description: string;
+  start_at: string | null;
+  end_at: string | null;
+  location: string | null;
+  attendees: string[];
+  html_link: string | null;
+};
+
+export const searchCalendarEvents = (query = "", time_min?: string, time_max?: string) =>
+  request<CalendarEvent[]>(
+    `/api/calendar/events?query=${encodeURIComponent(query)}` +
+      (time_min ? `&time_min=${encodeURIComponent(time_min)}` : "") +
+      (time_max ? `&time_max=${encodeURIComponent(time_max)}` : "")
+  );

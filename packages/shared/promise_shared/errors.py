@@ -238,6 +238,26 @@ class IntegrationInvalidRequest(IntegrationError):
         super().__init__(provider_name, detail)
 
 
+class IntegrationNotFound(IntegrationError):
+    """A resource the provider itself is authoritative for (a calendar event, a
+    message, ...) doesn't exist there — distinct from `NotFoundError` (a PROMISE
+    domain entity). Maps to HTTP 404."""
+
+    def __init__(self, provider_name: str, detail: str) -> None:
+        super().__init__(provider_name, detail)
+
+
+class IntegrationConflict(IntegrationError):
+    """The provider rejected the request because of a conflict with existing
+    provider-side state — most notably a client-supplied idempotency id that
+    already exists (see `GoogleCalendarIntegrationProvider.create_event`'s
+    idempotency strategy: a retried create is expected to hit this, and is
+    treated as a replay, not a failure). Maps to HTTP 409."""
+
+    def __init__(self, provider_name: str, detail: str) -> None:
+        super().__init__(provider_name, detail)
+
+
 # ---- document binary artifacts (packages/shared/promise_shared/blobs) --------------------------
 
 

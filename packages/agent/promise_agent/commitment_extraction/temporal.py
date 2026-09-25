@@ -17,6 +17,19 @@ week"), the default time of day is documented and configurable rather than
 hallucinated: it defaults to the "morning" daypart below, overridable via
 `PROMISE_DEFAULT_MORNING_HOUR` (and the sibling `_AFTERNOON_`/`_EVENING_`/
 `_NIGHT_` variables for their respective dayparts).
+
+An explicit clock time ("Friday at 2", "Friday at 2:30pm", "tomorrow at 14:00")
+is also recognized and takes priority over the daypart default -- needed for
+Calendar event creation, where an approximate "morning"/"afternoon" isn't
+precise enough (see `promise_agent.action_planning.create_calendar_event_planner`).
+"at 2" with no am/pm marker is a genuinely ambiguous phrase; the deterministic,
+documented resolution here is the same kind of assumption the daypart defaults
+already make: an hour of 1-6 with no meridiem means PM (a bare "at 2" almost
+always means 2 PM in scheduling contexts, mirroring `PROMISE_DEFAULT_AFTERNOON_HOUR`'s
+own use of 14:00), 7-12 means AM/noon as written. This is never an LLM guess —
+it's fixed, reproducible logic, and any calendar action built from it must show
+the resolved time explicitly (see that planner) so the assumption is never
+silently hidden from the user.
 """
 
 _WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -29,22 +42,46 @@ _DAYPART_ENV = {
 }
 _DAYPART_DEFAULTS = {"morning": 9, "afternoon": 14, "evening": 18, "night": 20}
 
+_CLOCK_TIME_SUFFIX = r"(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m\.?)?)?"
+
 _TEMPORAL_PATTERN = re.compile(
-    r"\btomorrow(?:\s+(?:morning|afternoon|evening|night))?\b"
-    r"|\btonight\b"
-    r"|\bthis\s+(?:morning|afternoon|evening)\b"
-    r"|\btoday\b"
-    r"|\bnext\s+week\b"
-    r"|\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
-    r"(?:\s+(?:morning|afternoon|evening|night))?\b",
+    r"\b(?:"
+    r"tomorrow(?:\s+(?:morning|afternoon|evening|night))?"
+    r"|tonight"
+    r"|this\s+(?:morning|afternoon|evening)"
+    r"|today"
+    r"|next\s+week"
+    r"|(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+(?:morning|afternoon|evening|night))?"
+    r")\b" + _CLOCK_TIME_SUFFIX,
     re.IGNORECASE,
 )
+
+_CLOCK_TIME_PATTERN = re.compile(r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(?:([ap])\.?m?\.?)?\b", re.IGNORECASE)
 
 
 def _daypart_hour(daypart: str | None) -> int:
     """The documented default: an unqualified day resolves to the morning hour."""
     key = daypart or "morning"
     return int(os.getenv(_DAYPART_ENV[key], str(_DAYPART_DEFAULTS[key])))
+
+
+def _explicit_clock_time(phrase: str) -> tuple[int, int] | None:
+    """Parses a trailing `"at H(:MM)? (am|pm)?"` clock time out of `phrase`, or
+    `None` if the phrase names no explicit time at all (just a day/daypart)."""
+    match = _CLOCK_TIME_PATTERN.search(phrase)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridiem = (match.group(3) or "").lower()
+    if meridiem == "p" and hour != 12:
+        hour += 12
+    elif meridiem == "a" and hour == 12:
+        hour = 0
+    elif not meridiem and 1 <= hour <= 6:
+        # see module docstring: a bare "at 2" with no am/pm is resolved to PM.
+        hour += 12
+    return hour, minute
 
 
 def extract_temporal_phrase(text: str) -> str | None:
@@ -94,4 +131,8 @@ def resolve_due_at(phrase: str | None, *, now: datetime) -> str | None:
         target = now + timedelta(days=delta)
         hour = _daypart_hour(daypart)
 
-    return target.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
+    resolved = target.replace(hour=hour, minute=0, second=0, microsecond=0)
+    explicit_clock_time = _explicit_clock_time(lower)
+    if explicit_clock_time is not None:
+        resolved = resolved.replace(hour=explicit_clock_time[0], minute=explicit_clock_time[1])
+    return resolved.isoformat()

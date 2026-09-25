@@ -33,10 +33,13 @@ _COMMITMENT_MARKERS = (
     "i'll", "i will", "i need to", "i've got to", "i have to", "i'm going to", "i am going to",
     "i plan to", "i promise", "i promised",
 )
-_ACTION_VERBS = ("send", "email", "call", "share", "deliver", "submit", "finish", "review", "follow up", "check", "confirm")
+_ACTION_VERBS = (
+    "send", "email", "call", "share", "deliver", "submit", "finish", "review", "follow up", "check", "confirm",
+    "meet", "meet with", "schedule",
+)
 
 _CONTACT_PATTERN = re.compile(
-    r"\b(?:to|send|email|call|share|deliver|submit|promised|tell|give)\s+([A-Z][a-zA-Z'-]+)\b"
+    r"\b(?:to|send|email|call|share|deliver|submit|promised|tell|give|meet|meet with|schedule)\s+([A-Z][a-zA-Z'-]+)\b"
 )
 _OTHER_SUBJECT_PATTERN = re.compile(r"^([A-Z][a-zA-Z'-]+)\s+(?:will|said|says|told me|is going to|promised)\b")
 _ACTION_VERB_PATTERN = re.compile(r"\b(" + "|".join(_ACTION_VERBS) + r")\b", re.IGNORECASE)

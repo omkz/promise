@@ -30,6 +30,7 @@ class ActionType(str, Enum):
     PUBLISH = "publish"
     MODIFY_DOCUMENT = "modify_document"
     DELETE = "delete"
+    CREATE_CALENDAR_EVENT = "create_calendar_event"
 
 
 class ActionStatus(str, Enum):
@@ -48,6 +49,7 @@ ACTION_TYPES_REQUIRING_APPROVAL = {
     ActionType.PUBLISH,
     ActionType.MODIFY_DOCUMENT,
     ActionType.DELETE,
+    ActionType.CREATE_CALENDAR_EVENT,
 }
 
 

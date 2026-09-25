@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlencode
 
 import httpx
@@ -13,9 +13,24 @@ from promise_shared.errors import (
     IntegrationUnavailable,
 )
 
-from .config import GMAIL_AUTH_ENDPOINT, GMAIL_TOKEN_ENDPOINT, GmailConfig
+from .config import GMAIL_AUTH_ENDPOINT, GMAIL_TOKEN_ENDPOINT
 
 PROVIDER_NAME = "gmail"
+
+
+class GoogleOAuthCredentials(Protocol):
+    """The structural shape `GoogleOAuthClient` needs -- satisfied by both
+    `gmail.config.GmailConfig` and `calendar.config.CalendarConfig` (each a
+    plain dataclass, no shared base class needed; this is exactly what
+    `Protocol` is for). Both providers share one Google OAuth *client*
+    (never a second, duplicate implementation of the authorization-code
+    flow) with two different scope sets/redirect URIs -- see
+    `promise_integrations.calendar.oauth` for the Calendar side."""
+
+    client_id: str
+    client_secret: str
+    redirect_uri: str
+    scopes: tuple[str, ...]
 
 
 def _normalize_token_response(body: dict[str, Any]) -> dict[str, Any]:
@@ -34,7 +49,11 @@ def _normalize_token_response(body: dict[str, Any]) -> dict[str, Any]:
 
 class GoogleOAuthClient:
     """Server-side Google OAuth 2.0 authorization-code flow, plus the one Gmail
-    profile lookup needed to identify which mailbox got connected.
+    profile lookup needed to identify which mailbox got connected -- shared by
+    every Google-backed provider (Gmail, Google Calendar), never duplicated
+    per provider. `get_profile` is Gmail-specific (it calls Gmail's own
+    `users.getProfile`); Calendar doesn't need an identity lookup of its own,
+    so it simply never calls that method.
 
     Talks to Google over plain HTTP via `httpx` (the documented REST endpoints
     -- no `google-auth`/`google-api-python-client` SDK dependency). `transport`
@@ -43,7 +62,7 @@ class GoogleOAuthClient:
     required by the normal test suite.
     """
 
-    def __init__(self, config: GmailConfig, *, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(self, config: GoogleOAuthCredentials, *, transport: httpx.BaseTransport | None = None) -> None:
         self._config = config
         self._client = httpx.Client(transport=transport, timeout=10.0)
 

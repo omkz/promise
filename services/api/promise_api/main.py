@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from promise_app.bootstrap import AppContext
+from promise_integrations.calendar import CalendarNotConfigured
 from promise_integrations.gmail import GmailNotConfigured
 from promise_shared.errors import (
     ApprovalRequiredError,
@@ -22,8 +23,10 @@ from promise_shared.errors import (
     InsufficientScope,
     IntegrationAuthorizationRequired,
     IntegrationAuthorizationRevoked,
+    IntegrationConflict,
     IntegrationInvalidRequest,
     IntegrationNotConnected,
+    IntegrationNotFound,
     IntegrationPermissionDenied,
     IntegrationRateLimited,
     IntegrationTokenExpired,
@@ -182,12 +185,27 @@ def _attachment_too_large(_: Request, exc: AttachmentTooLarge) -> JSONResponse:
     )
 
 
+@app.exception_handler(IntegrationNotFound)
+def _integration_not_found(_: Request, exc: IntegrationNotFound) -> JSONResponse:
+    return JSONResponse({"error": str(exc), "provider": exc.provider_name}, status_code=404)
+
+
+@app.exception_handler(IntegrationConflict)
+def _integration_conflict(_: Request, exc: IntegrationConflict) -> JSONResponse:
+    return JSONResponse({"error": str(exc), "provider": exc.provider_name}, status_code=409)
+
+
 @app.exception_handler(GmailNotConfigured)
 def _gmail_not_configured(_: Request, exc: GmailNotConfigured) -> JSONResponse:
     """An admin/deployment configuration gap (missing GOOGLE_CLIENT_ID/SECRET/
     REDIRECT_URI), not a per-user "not connected" state -- 503, matching how
     every other unconfigured/unavailable provider dependency is surfaced."""
     return JSONResponse({"error": str(exc), "provider": "gmail"}, status_code=503)
+
+
+@app.exception_handler(CalendarNotConfigured)
+def _calendar_not_configured(_: Request, exc: CalendarNotConfigured) -> JSONResponse:
+    return JSONResponse({"error": str(exc), "provider": "google_calendar"}, status_code=503)
 
 
 @app.exception_handler(ValueError)

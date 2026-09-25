@@ -4,7 +4,8 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Nav from "../../components/Nav";
 import {
-  connectIntegration, disconnectIntegration, listIntegrations, startGmailConnect, type IntegrationAccount,
+  connectIntegration, disconnectIntegration, listIntegrations, startCalendarConnect, startGmailConnect,
+  type IntegrationAccount,
 } from "../../lib/api";
 
 // useSearchParams() (to read ?gmail=connected|error off the OAuth callback's redirect)
@@ -32,12 +33,16 @@ function ConnectionsPageContent() {
 
   useEffect(() => { refresh().catch(() => setNotice("Start the backend on port 8000.")); }, []);
 
-  // Landed back here from GET /api/integrations/gmail/callback's redirect --
-  // ?gmail=connected|error, never a token (see that route's own docstring).
+  // Landed back here from GET /api/integrations/gmail|calendar/callback's redirect --
+  // ?gmail=connected|error / ?calendar=connected|error, never a token (see those
+  // routes' own docstrings).
   useEffect(() => {
     const gmail = searchParams.get("gmail");
     if (gmail === "connected") { setNotice("Gmail connected."); refresh(); }
     else if (gmail === "error") { setNotice("Couldn't connect Gmail. Please try again."); }
+    const calendar = searchParams.get("calendar");
+    if (calendar === "connected") { setNotice("Google Calendar connected."); refresh(); }
+    else if (calendar === "error") { setNotice("Couldn't connect Google Calendar. Please try again."); }
   }, [searchParams]);
 
   async function connectGmail() {
@@ -47,6 +52,17 @@ function ConnectionsPageContent() {
       window.location.href = authorization_url;
     } catch (e) {
       setNotice(e instanceof Error ? e.message : "Failed to start Gmail connect");
+      setBusy(false);
+    }
+  }
+
+  async function connectCalendar() {
+    setBusy(true); setNotice("");
+    try {
+      const { authorization_url } = await startCalendarConnect();
+      window.location.href = authorization_url;
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Failed to start Google Calendar connect");
       setBusy(false);
     }
   }
@@ -67,7 +83,12 @@ function ConnectionsPageContent() {
   }
 
   const gmailAccount = accounts.find((a) => a.provider === "gmail" && a.status !== "disconnected");
-  const otherAccounts = accounts.filter((a) => a.provider !== "gmail");
+  const calendarAccount = accounts.find((a) => a.provider === "google_calendar" && a.status !== "disconnected");
+  // "Permission required": the user has already granted Google access via Gmail but
+  // hasn't yet granted the separate Calendar scope -- distinct from "Not connected"
+  // (never connected any Google account at all), per the connections UI spec.
+  const calendarNeedsPermission = !calendarAccount && !!gmailAccount;
+  const otherAccounts = accounts.filter((a) => a.provider !== "gmail" && a.provider !== "google_calendar");
 
   return (
     <main className="shell">
@@ -93,12 +114,32 @@ function ConnectionsPageContent() {
         </div>
       </div>
 
+      <div className="row-card">
+        <div className="meta">
+          <strong>Google Calendar</strong>
+          <small>
+            {calendarAccount
+              ? `Connected as: ${calendarAccount.account_identifier}`
+              : calendarNeedsPermission
+                ? "Permission required"
+                : "Not connected"}
+          </small>
+        </div>
+        {calendarAccount && <span className={`pill ${calendarAccount.status}`}>{calendarAccount.status}</span>}
+        <div className="row-actions">
+          {calendarAccount ? (
+            <button className="ghost" disabled={busy} onClick={() => disconnect(calendarAccount.id)}>Disconnect</button>
+          ) : (
+            <button disabled={busy} onClick={connectCalendar}>Connect Calendar</button>
+          )}
+        </div>
+      </div>
+
       <div className="connect-form">
         <select value={provider} onChange={(e) => setProvider(e.target.value)}>
           <option value="google_drive">Google Drive</option>
           <option value="slack">Slack</option>
           <option value="notion">Notion</option>
-          <option value="calendar">Calendar</option>
         </select>
         <input placeholder="Account (e.g. name@company.com)" value={identifier} onChange={(e) => setIdentifier(e.target.value)} />
         <button onClick={connect} disabled={busy}>Connect</button>

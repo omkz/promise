@@ -106,9 +106,12 @@ class AgentOrchestrator:
             "commitment": self.repos.commitments.require(workspace_id, commitment_id),
             "contact": contact,
             "action_plan": plan.get("action_plan"),
-            "document": plan["document"],
-            "changes": plan["changes"],
-            "draft": plan["draft"],
+            # Not every planner produces a document/draft (e.g. CreateCalendarEventPlanner
+            # proposes an external calendar event, not an outbound message) -- .get(...)
+            # with a safe default rather than plan[...], which would KeyError for those.
+            "document": plan.get("document"),
+            "changes": plan.get("changes", []),
+            "draft": plan.get("draft"),
             "action": action,
             "approval": approval,
         }

@@ -706,6 +706,155 @@ tests/test_document_blob_store.py tests/test_document_artifact.py`
 for `S3BlobStore`, and real (fixture) `.docx`/`.pdf` binaries under `tests/fixtures/` — no live
 network or real Google/AWS credentials required.
 
+## Google Calendar Integration
+
+```
+PROMISE
+  |
+  v
+GoogleCalendarIntegrationProvider (packages/integrations/promise_integrations/calendar/)
+  |-- search_events   (Events list, singleEvents=true, orderBy=startTime, paginated)
+  |-- get_event
+  \-- create_event    (Events insert -- client-supplied event id for idempotency)
+```
+
+v1 supports: "I need to meet Andi Friday at 2" -> commitment captured -> "Set it up." ->
+`CreateCalendarEventPlanner` proposes a `CREATE_CALENDAR_EVENT` action -> approval ->
+`execute_action` creates the real Google Calendar event and records its provider identity.
+Also: "What's on my calendar around Friday afternoon?" -> Calendar participates in Context
+Retrieval like any other search provider. **No event is ever created without an explicit
+approval** — the provider's `create_event` is called only from the approval-gated execution
+step, never from planning. v1 is read + create only: no update/cancel, no recurrence, no
+calendars other than `primary`.
+
+**Reuses the existing Google OAuth architecture — not a second implementation.** Calendar uses
+the exact same `GoogleOAuthClient` (`packages/integrations/promise_integrations/gmail/oauth.py`)
+Gmail already uses, and the exact same shared `GoogleTokenManager`
+(`packages/integrations/promise_integrations/google_token_manager.py`, extracted from Gmail's own
+token-refresh logic during this work so both providers use one implementation) for
+refresh-on-expiry/refresh-on-401/revocation handling. Only the scopes, redirect URI, and
+`IntegrationAccount.provider`/`secret_ref` namespace (`google_calendar` vs `gmail`) differ.
+
+**1. Required scope** (centralized in `promise_integrations/calendar/config.py`):
+   ```
+   https://www.googleapis.com/auth/calendar.events.owned
+   ```
+   Deliberately the narrowest scope that covers v1's needs (view/create/change/delete events on
+   calendars the authenticated user owns) — never the broad `calendar` scope, and never
+   `calendar.acls`/`calendar.calendars`/`calendar.settings.readonly`/`calendar.freebusy`, none of
+   which any implemented v1 operation needs.
+
+**2. Required redirect URI**: `GOOGLE_CALENDAR_REDIRECT_URI` — its own registered URI, separate
+   from Gmail's `GOOGLE_REDIRECT_URI` (e.g.
+   `http://localhost:8000/api/integrations/calendar/callback` locally). `GOOGLE_CLIENT_ID`/
+   `GOOGLE_CLIENT_SECRET` are shared with Gmail (one Google Cloud OAuth client, two scope sets).
+
+**3. Incremental authorization**: Gmail and Calendar are connected independently — each gets its
+   own `IntegrationAccount` row (`provider="gmail"` vs `provider="google_calendar"`) and its own
+   `secret_ref`. A user who already connected Gmail connects Calendar separately, through its own
+   `/api/integrations/calendar/connect` flow, without ever being asked to reconnect Gmail; Google's
+   consent screen only prompts for the additional Calendar scope. "Has Gmail connected" is never
+   treated as "has Calendar permission" — each is resolved and checked independently
+   (`IntegrationRegistry.resolve_for_user(..., provider_name="google_calendar")`).
+
+**4. Local OAuth setup** — in `services/api/.env` (see `.env.example`):
+   ```env
+   CALENDAR_ENABLED=true
+   GOOGLE_CLIENT_ID=<your-client-id>
+   GOOGLE_CLIENT_SECRET=<your-client-secret>
+   GOOGLE_CALENDAR_REDIRECT_URI=http://localhost:8000/api/integrations/calendar/callback
+   WEB_APP_URL=http://localhost:3000
+   ```
+   `CALENDAR_ENABLED=false` (the default) means the feature doesn't exist at runtime at all — same
+   "never registered, never a silent fallback" behavior `GMAIL_ENABLED=false` has.
+
+**5. How to connect**: web app -> **Connections** -> **Connect Calendar**. Same mechanics as
+   Gmail's connect flow (see "How to connect Gmail" above): the client fetches
+   `GET /api/integrations/calendar/connect` (carrying auth headers a plain link couldn't), then
+   navigates the browser to the returned Google authorization URL itself. Google redirects back to
+   `GET /api/integrations/calendar/callback` (no PROMISE auth headers — identity comes only from the
+   random, single-use, principal-bound `state` row `promise_app/calendar_oauth.py` created).
+   `?calendar=connected` / `?calendar=error` on the web app's `/connections` page either way, never
+   a token in the URL. The Connections page shows **Connected** (with the linked account email),
+   **Permission required** (Gmail is connected but Calendar isn't yet — the narrower, more
+   accurate state than a blank "Not connected" for a user PROMISE already has a Google
+   relationship with), or **Not connected**.
+
+**6. Token storage**: identical mechanism to Gmail — `IntegrationAccount.secret_ref` points into
+   the same `SecretStore` (`SECRET_STORE_BACKEND=local`/`aws`), never a raw token on the account
+   record itself. See "How PROMISE stores credentials securely" above.
+
+**7. Calendar in Context Retrieval**: `CalendarSearchProvider`
+   (`packages/agent/promise_agent/context_retrieval/providers.py`) adapts
+   `GoogleCalendarIntegrationProvider.search_events` into the same `ContextSearchProvider` seam
+   Documents/Messages already use — never a special `CalendarRetriever` or a code path inside
+   `ContextRetriever` itself. It's the one provider that also uses the query's `time_window`
+   (`timeMin`/`timeMax`), so a pure date-range ask ("what's on my calendar Friday") returns results
+   even with no keywords. Relevance is lexical/metadata matching only (contact/participant name,
+   date overlap, title/description text) — no semantic ranking is implemented or claimed. Not
+   connected -> no Calendar results, other providers unaffected; Calendar fails mid-request ->
+   retrieval status is `PARTIAL`, other providers' results are still returned, never a fabricated
+   Calendar result.
+
+**8. Calendar Action Planning**: `CreateCalendarEventPlanner`
+   (`packages/agent/promise_agent/action_planning/create_calendar_event_planner.py`) recognizes a
+   commitment whose action is "meet"/"meet with"/"schedule" and proposes a
+   `CREATE_CALENDAR_EVENT` action — it never calls a `CalendarProvider` at all (its `plan()` takes
+   no provider argument), so it's structurally incapable of creating the real event itself.
+   `commitment.due_at` (already resolved by the existing temporal-normalization engine — see
+   `commitment_extraction/temporal.py`) is used verbatim as the explicit, timezone-aware start
+   time; the planner never re-parses text or lets an LLM guess a time. No explicit duration in the
+   commitment -> a configurable default (`CALENDAR_DEFAULT_EVENT_DURATION_MINUTES`, 30 minutes)
+   is used, and the assumption is stated explicitly in the proposed action's own rationale, never
+   silently assumed. **Attendee safety**: a contact with a verified email is invited; a contact
+   with no verified email is never invited by guessing one — the event is still proposed (useful
+   as a personal calendar entry on its own), just without an attendee, and the rationale says so
+   explicitly ("... will not be invited automatically — no verified email is on file."). Location
+   is never invented. Known v1 limitation: the planner does not check retrieved Calendar context
+   for a conflicting existing event before proposing a time — the proposed action's summary always
+   shows the exact time so a human approver can catch a conflict themselves.
+
+**9. Approval and execution**: identical state machine to every other action type — `Action` ->
+   `WAITING_FOR_APPROVAL` -> explicit `decide_approval` -> `execute_approved_action` ->
+   `completed`. `execute_action`'s `create_calendar_event` branch
+   (`packages/agent/promise_agent/steps/execution.py`) resolves the *executing* user's own
+   connected Calendar account and calls `create_event` only then. Unlike `send_message`, there is
+   **no local/demo fallback** — a calendar event is inherently external, so no connected account
+   means the action is recorded `FAILED` with `IntegrationNotConnected`, never a crash and never a
+   silently-invented local event.
+
+**10. Idempotency**: uses Google Calendar's own documented mechanism for `events.insert` — a
+   client-supplied event `id`, derived deterministically from `Action.idempotency_key` via a SHA-1
+   hex digest (`derive_event_id`, `packages/integrations/promise_integrations/calendar/
+   provider.py`; hex digits are already within Google's required `^[a-v0-9]{5,1024}$` charset, so
+   no extra encoding is needed). Retrying `create_event` with the same `idempotency_key` always
+   targets the same event id; Google returns `409 Conflict` for the duplicate insert rather than
+   creating a second event, and PROMISE treats that 409 as a replay — it fetches and returns the
+   existing event (`idempotent_replay: True`) instead of failing. This is what prevents a duplicate
+   event after a network timeout where PROMISE doesn't know whether the first `events.insert`
+   actually reached Google. On top of that, the existing `Action.status == EXECUTED` check (raises
+   `DuplicateActionError`) prevents `execute_action` from even attempting a second `create_event`
+   call for an already-executed action.
+
+**11. Event verification**: a successful `create_event` result always carries the provider's own
+   event id, calendar id, `status`, `htmlLink`, and creation timestamp
+   (`normalize_calendar_event`) — this is what gets stored on `Action.result` and what
+   `execute_action` requires before marking the action `EXECUTED`; an HTTP 200 alone, with no
+   provider identity recorded, is never treated as success.
+
+**12. Not implemented in v1** (see `CalendarProvider`'s own docstring for the extension points):
+   `update_event`/`delete_event`/`move_event`, recurring events, calendars other than `primary`,
+   reminders, free/busy queries, calendar-list/ACL management. Adding any of these is a new method
+   on the existing provider/protocol, not a new architecture.
+
+**Try it**: `uv run pytest tests/test_calendar_config.py tests/test_calendar_oauth.py
+tests/test_calendar_oauth_routes.py tests/test_calendar_provider.py
+tests/test_calendar_mock_provider.py tests/test_calendar_context_retrieval.py
+tests/test_calendar_planner.py tests/test_calendar_approval_flow.py
+tests/test_calendar_authorization.py`
+— `httpx.MockTransport`-backed fakes for every Google HTTP call, no live network or real Google
+credentials required.
+
 ## Known limitations / next steps
 
 - Identity & Authorization is v1 (see the section above): `AUTH_MODE=oidc` validates real

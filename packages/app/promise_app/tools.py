@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from promise_agent import llm
-from promise_agent.context_retrieval import ContextRetriever, DocumentSearchProvider, MessageSearchProvider, build_commitment_query
+from promise_agent.context_retrieval import (
+    CalendarSearchProvider,
+    ContextRetriever,
+    DocumentSearchProvider,
+    MessageSearchProvider,
+    build_commitment_query,
+)
 from promise_agent.document_revision import build_revised_document
 from promise_agent.steps import approval as approval_step
 from promise_agent.steps import completion as completion_step
@@ -165,6 +171,9 @@ def retrieve_commitment_context(
     gmail = ctx.integrations.resolve_for_user(workspace_id, user_id, provider_name="gmail")
     if gmail is not None:
         providers.append(MessageSearchProvider(gmail))
+    calendar = ctx.integrations.resolve_for_user(workspace_id, user_id, provider_name="google_calendar")
+    if calendar is not None:
+        providers.append(CalendarSearchProvider(calendar))
     retriever = ContextRetriever(ctx.integrations.get(), providers=providers)
     outcome = retriever.retrieve(query)
 
@@ -244,6 +253,27 @@ def get_message(ctx: AppContext, *, workspace_id: str, user_id: str, message_id:
     if message is None:
         raise NotFoundError("message", message_id)
     return message
+
+
+def search_calendar_events(
+    ctx: AppContext, *, workspace_id: str, user_id: str, query: str = "", time_min: str | None = None,
+    time_max: str | None = None, calendar_id: str = "primary",
+) -> list[dict[str, Any]]:
+    """The calling user's own connected Google Calendar, searched live -- see
+    `tools.search_messages`'s docstring for the same user-scoping guarantee
+    (`IntegrationRegistry.resolve_for_user` looks the account up by
+    `workspace_id` + `user_id`, never a caller-supplied account id). Unlike
+    `search_messages`, there is no local/demo calendar to fall back to: no
+    connected account simply means an empty result, not an error (a user who
+    hasn't connected Calendar yet asking "what's on my calendar" should see
+    "nothing found," not a 409) -- `time_min`/`time_max` must already be
+    explicit, timezone-aware ISO 8601 timestamps (see
+    `GoogleCalendarIntegrationProvider.search_events`'s own docstring for why;
+    this function never normalizes a bare date itself)."""
+    calendar = ctx.integrations.resolve_for_user(workspace_id, user_id, provider_name="google_calendar")
+    if calendar is None:
+        return []
+    return calendar.search_events(workspace_id, query=query, time_min=time_min, time_max=time_max, calendar_id=calendar_id)
 
 
 # ---- drafting / revision ----------------------------------------------------

@@ -10,6 +10,11 @@ and no LLM (see `selection.py`).
 
 SEND_TYPE_VERBS = ("send", "email", "share", "deliver", "submit", "forward")
 
+# Mirrors `promise_agent.commitment_extraction.provider._ACTION_VERBS`' own "meet"/
+# "schedule" additions -- a commitment's `action` is only ever one of the verbs that
+# module already recognizes, so this list must stay a subset of that one.
+MEETING_TYPE_VERBS = ("meet", "meet with", "schedule")
+
 # Words that indicate the commitment wants a *revised* artifact, not the document
 # as it already exists. Checked against the commitment's own action/description —
 # never against any specific document or contact name.
@@ -25,6 +30,11 @@ REVISION_SIGNAL_WORDS = (
 def has_send_verb(action: str | None) -> bool:
     action = (action or "").strip().lower()
     return any(action == verb or action.startswith(f"{verb} ") for verb in SEND_TYPE_VERBS)
+
+
+def has_meeting_verb(action: str | None) -> bool:
+    action = (action or "").strip().lower()
+    return any(action == verb or action.startswith(f"{verb} ") for verb in MEETING_TYPE_VERBS)
 
 
 def has_revision_signal(commitment: Commitment) -> bool:

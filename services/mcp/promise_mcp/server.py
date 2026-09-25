@@ -236,6 +236,23 @@ def get_message(message_id: str, mcp_ctx: Context | None = None) -> dict[str, An
 
 
 @mcp.tool()
+def search_calendar(
+    query: str = "", time_min: str | None = None, time_max: str | None = None, calendar_id: str = "primary",
+    mcp_ctx: Context | None = None,
+) -> list[dict[str, Any]]:
+    """Search calendar events through the calling user's connected Google Calendar
+    account -- no Calendar-specific business logic here (see
+    `promise_app.tools.search_calendar_events`). Returns an empty list when the
+    user has no connected Calendar account."""
+    principal = _authenticate(mcp_ctx)
+    require(principal, Permission.CONTEXT_READ)
+    return _dump(tools.search_calendar_events(
+        ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, query=query,
+        time_min=time_min, time_max=time_max, calendar_id=calendar_id,
+    ))
+
+
+@mcp.tool()
 def prepare_revision(document_id: str, feedback: str, mcp_ctx: Context | None = None) -> dict[str, Any]:
     """Prepare a revised document using the given feedback (does not send anything)."""
     principal = _authenticate(mcp_ctx)

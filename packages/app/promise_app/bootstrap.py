@@ -8,6 +8,7 @@ from promise_agent.orchestrator import AgentOrchestrator
 from promise_auth import AuthProvider, LocalAuthProvider, OIDCAuthProvider
 from promise_domain.enums import MembershipRole, MembershipStatus
 from promise_domain.models import IntegrationAccount, User, Workspace, WorkspaceMembership
+from promise_integrations.calendar import GoogleCalendarIntegrationProvider, calendar_enabled, load_calendar_config
 from promise_integrations.gmail import GmailIntegrationProvider, gmail_enabled, load_gmail_config
 from promise_integrations.local_provider import LocalIntegrationProvider
 from promise_integrations.registry import IntegrationRegistry
@@ -119,6 +120,27 @@ def _gmail_provider_factory(repos: RepoSet, secret_store: SecretStore, blob_stor
     return factory
 
 
+def _calendar_provider_factory(secret_store: SecretStore):
+    """Same closure shape as `_gmail_provider_factory` -- Calendar needs no
+    `repos`/`blob_store` (no local Draft/document concept for calendar
+    events), only the secret store for its OAuth tokens."""
+
+    def factory(account: IntegrationAccount):
+        from promise_shared.errors import IntegrationNotConnected
+
+        if not account.secret_ref:
+            raise IntegrationNotConnected("google_calendar")
+        return GoogleCalendarIntegrationProvider(
+            account_id=account.id,
+            workspace_id=account.workspace_id,
+            secret_ref=account.secret_ref,
+            secret_store=secret_store,
+            config=load_calendar_config(),
+        )
+
+    return factory
+
+
 def build_context(
     store: EntityStore | None = None, *, auth_provider: AuthProvider | None = None,
     secret_store: SecretStore | None = None, blob_store: DocumentBlobStore | None = None,
@@ -133,7 +155,11 @@ def build_context(
     # resolve_for_user("gmail") always returns None and every Gmail-aware call
     # site behaves exactly as it did before Gmail existed -- zero behavior
     # change for anyone not opting in.
-    provider_factories = {"gmail": _gmail_provider_factory(repos, secret_store, blob_store)} if gmail_enabled() else {}
+    provider_factories = {}
+    if gmail_enabled():
+        provider_factories["gmail"] = _gmail_provider_factory(repos, secret_store, blob_store)
+    if calendar_enabled():
+        provider_factories["google_calendar"] = _calendar_provider_factory(secret_store)
     integrations = IntegrationRegistry(local_provider, integration_accounts=repos.integration_accounts, provider_factories=provider_factories)
 
     agent_repos = build_agent_repos(repos, integrations, blob_store)

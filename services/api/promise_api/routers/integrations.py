@@ -5,7 +5,7 @@ import os
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
-from promise_app import gmail_oauth, tools
+from promise_app import calendar_oauth, gmail_oauth, tools
 from promise_app.bootstrap import AppContext
 from promise_auth import AuthenticatedPrincipal, Permission, require
 from promise_domain.models import IntegrationAccount
@@ -105,3 +105,43 @@ def gmail_callback(
         return RedirectResponse(f"{web_app_url}/connections?gmail=error")
     logger.info("gmail_oauth_callback connected workspace=%s account=%s", account.workspace_id, account.id)
     return RedirectResponse(f"{web_app_url}/connections?gmail=connected")
+
+
+# ---- Google Calendar OAuth -------------------------------------------------------------------
+#
+# Exact same shape as the Gmail routes above; `calendar_oauth.py` (promise_app) holds the
+# actual OAuth/token logic.
+
+
+@router.get("/calendar/connect")
+def calendar_connect(
+    principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
+) -> dict[str, str]:
+    """See `gmail_connect`'s docstring -- same reasoning applies here: the
+    client fetches this JSON (carrying its own auth headers) and performs the
+    actual navigation itself."""
+    require(principal, Permission.INTEGRATIONS_MANAGE)
+    url = calendar_oauth.start_calendar_oauth(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id)
+    return {"authorization_url": url}
+
+
+@router.get("/calendar/callback")
+def calendar_callback(
+    state: str, code: str | None = None, error: str | None = None, ctx: AppContext = Depends(get_context)
+) -> RedirectResponse:
+    """See `gmail_callback`'s docstring -- same reasoning applies here:
+    identity comes only from the validated, principal-bound `state` row."""
+    web_app_url = os.getenv("WEB_APP_URL", "http://localhost:3000").rstrip("/")
+    if error:
+        logger.info("calendar_oauth_callback denied_by_user error=%s", error)
+        return RedirectResponse(f"{web_app_url}/connections?calendar=error&reason=denied")
+    if not code:
+        return RedirectResponse(f"{web_app_url}/connections?calendar=error&reason=missing_code")
+    try:
+        account = calendar_oauth.handle_calendar_oauth_callback(ctx, state_token=state, code=code)
+    except PromiseError as exc:
+        # Never leaks the authorization code, a token, or the raw provider response.
+        logger.warning("calendar_oauth_callback failed error_type=%s detail=%s", type(exc).__name__, exc)
+        return RedirectResponse(f"{web_app_url}/connections?calendar=error")
+    logger.info("calendar_oauth_callback connected workspace=%s account=%s", account.workspace_id, account.id)
+    return RedirectResponse(f"{web_app_url}/connections?calendar=connected")

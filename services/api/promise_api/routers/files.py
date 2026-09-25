@@ -66,6 +66,18 @@ def get_message(
     return tools.get_message(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, message_id=message_id)
 
 
+@router.get("/calendar/events")
+def search_calendar_events(
+    query: str = "", time_min: str | None = None, time_max: str | None = None, calendar_id: str = "primary",
+    principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context),
+) -> list[dict[str, Any]]:
+    require(principal, Permission.CONTEXT_READ)
+    return tools.search_calendar_events(
+        ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, query=query,
+        time_min=time_min, time_max=time_max, calendar_id=calendar_id,
+    )
+
+
 @router.get("/contacts")
 def list_contacts(
     principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)

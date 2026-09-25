@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from typing import Any
 
 import httpx
@@ -12,24 +11,18 @@ from promise_shared.clock import iso_now
 from promise_shared.errors import (
     AttachmentTooLarge,
     DocumentArtifactMissing,
-    IntegrationAuthorizationRevoked,
     IntegrationInvalidRequest,
-    IntegrationNotConnected,
     IntegrationPermissionDenied,
     IntegrationRateLimited,
-    IntegrationTokenExpired,
     IntegrationUnavailable,
 )
 from promise_shared.secrets import SecretStore
 
+from ..google_token_manager import GoogleTokenManager
 from .config import GMAIL_API_BASE, GmailConfig
 from .mime import build_raw_send_message, normalize_gmail_message
-from .oauth import GoogleOAuthClient
 
 PROVIDER_NAME = "gmail"
-
-# Refresh a bit before actual expiry so a call never races Google's own clock.
-_TOKEN_REFRESH_SKEW_SECONDS = 60
 
 
 def _raise_for_status(resp: httpx.Response) -> None:
@@ -82,45 +75,20 @@ class GmailIntegrationProvider:
         self._blob_store = blob_store
         self._max_attachment_bytes = config.max_attachment_bytes
         self._attachment_encoding_margin = config.attachment_encoding_margin
-        self._oauth = GoogleOAuthClient(config, transport=transport)
+        self._tokens = GoogleTokenManager(
+            provider_name=PROVIDER_NAME, secret_ref=secret_ref, secret_store=secret_store, config=config, transport=transport
+        )
         self._http = httpx.Client(transport=transport, timeout=10.0)
 
-    # ---- token handling -----------------------------------------------------------------
-
-    def _refresh(self, refresh_token: str) -> dict[str, Any]:
-        try:
-            refreshed = self._oauth.refresh_access_token(refresh_token)
-        except IntegrationAuthorizationRevoked:
-            # Authorization was revoked outside PROMISE (e.g. the user removed access from
-            # their Google Account) -- never retry the same refresh token again; the account
-            # must be reconnected. Deleting the secret here means every subsequent call fails
-            # closed with IntegrationNotConnected/IntegrationTokenExpired, not a repeated
-            # revoked-token error against Google.
-            self._secret_store.delete_secret(self._secret_ref)
-            raise
-        self._secret_store.put_secret(self._secret_ref, refreshed)
-        return refreshed
-
-    def _access_token(self, *, force_refresh: bool = False) -> str:
-        secret = self._secret_store.get_secret(self._secret_ref)
-        if secret is None:
-            raise IntegrationNotConnected(PROVIDER_NAME)
-        if not force_refresh and secret.get("expires_at", 0) > time.time() + _TOKEN_REFRESH_SKEW_SECONDS:
-            return secret["access_token"]
-        refresh_token = secret.get("refresh_token")
-        if not refresh_token:
-            raise IntegrationTokenExpired(PROVIDER_NAME)
-        return self._refresh(refresh_token)["access_token"]
-
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        token = self._access_token()
+        token = self._tokens.access_token()
         resp = self._http.request(method, f"{GMAIL_API_BASE}{path}", headers={"Authorization": f"Bearer {token}"}, **kwargs)
         if resp.status_code == 401:
             # The access token itself was rejected outright (not just "expiring soon" --
-            # _access_token() already handles that case). One forced refresh-and-retry,
+            # access_token() already handles that case). One forced refresh-and-retry,
             # never an unbounded retry loop; a second 401 after a fresh token is a real
             # failure, not a race to paper over.
-            token = self._access_token(force_refresh=True)
+            token = self._tokens.access_token(force_refresh=True)
             resp = self._http.request(method, f"{GMAIL_API_BASE}{path}", headers={"Authorization": f"Bearer {token}"}, **kwargs)
         _raise_for_status(resp)
         return resp
