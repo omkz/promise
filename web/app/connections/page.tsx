@@ -24,6 +24,7 @@ function ConnectionsPageContent() {
   const [provider, setProvider] = useState("google_drive");
   const [identifier, setIdentifier] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
   const searchParams = useSearchParams();
 
@@ -31,7 +32,9 @@ function ConnectionsPageContent() {
     setAccounts(await listIntegrations());
   }
 
-  useEffect(() => { refresh().catch(() => setNotice("Start the backend on port 8000.")); }, []);
+  useEffect(() => {
+    refresh().catch(() => setNotice("Start the backend on port 8000.")).finally(() => setLoading(false));
+  }, []);
 
   // Landed back here from GET /api/integrations/gmail|calendar/callback's redirect --
   // ?gmail=connected|error / ?calendar=connected|error, never a token (see those
@@ -99,64 +102,70 @@ function ConnectionsPageContent() {
       <div className="page-head"><p className="eyebrow">WHERE THE AGENT LOOKS AND ACTS</p><h1>Connections</h1></div>
       {notice && <div className="notice">{notice}</div>}
 
-      <div className="row-card">
-        <div className="meta">
-          <strong>Gmail</strong>
-          <small>{gmailAccount ? `Connected as: ${gmailAccount.account_identifier}` : "Not connected"}</small>
-        </div>
-        {gmailAccount && <span className={`pill ${gmailAccount.status}`}>{gmailAccount.status}</span>}
-        <div className="row-actions">
-          {gmailAccount ? (
-            <button className="ghost" disabled={busy} onClick={() => disconnect(gmailAccount.id)}>Disconnect</button>
-          ) : (
-            <button disabled={busy} onClick={connectGmail}>Connect Gmail</button>
-          )}
-        </div>
-      </div>
-
-      <div className="row-card">
-        <div className="meta">
-          <strong>Google Calendar</strong>
-          <small>
-            {calendarAccount
-              ? `Connected as: ${calendarAccount.account_identifier}`
-              : calendarNeedsPermission
-                ? "Permission required"
-                : "Not connected"}
-          </small>
-        </div>
-        {calendarAccount && <span className={`pill ${calendarAccount.status}`}>{calendarAccount.status}</span>}
-        <div className="row-actions">
-          {calendarAccount ? (
-            <button className="ghost" disabled={busy} onClick={() => disconnect(calendarAccount.id)}>Disconnect</button>
-          ) : (
-            <button disabled={busy} onClick={connectCalendar}>Connect Calendar</button>
-          )}
-        </div>
-      </div>
-
-      <div className="connect-form">
-        <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-          <option value="google_drive">Google Drive</option>
-          <option value="slack">Slack</option>
-          <option value="notion">Notion</option>
-        </select>
-        <input placeholder="Account (e.g. name@company.com)" value={identifier} onChange={(e) => setIdentifier(e.target.value)} />
-        <button onClick={connect} disabled={busy}>Connect</button>
-      </div>
-
-      <div className="rows">
-        {otherAccounts.length === 0 && <div className="empty">No other connected accounts yet. Local/demo data is used until you connect one.</div>}
-        {otherAccounts.map((a) => (
-          <div className="row-card" key={a.id}>
-            <div className="meta"><strong>{a.provider}</strong><small>{a.account_identifier}</small></div>
-            <span className={`pill ${a.status}`}>{a.status}</span>
+      {loading ? (
+        <div className="empty">Loading connections…</div>
+      ) : (
+        <>
+          <div className="row-card">
+            <div className="meta">
+              <strong>Gmail</strong>
+              <small>{gmailAccount ? `Connected as: ${gmailAccount.account_identifier}` : "Not connected"}</small>
+            </div>
+            {gmailAccount && <span className={`pill ${gmailAccount.status}`}>{gmailAccount.status}</span>}
             <div className="row-actions">
-              <button className="ghost" disabled={busy || a.status === "disconnected"} onClick={() => disconnect(a.id)}>Disconnect</button>
+              {gmailAccount ? (
+                <button className="ghost" disabled={busy} onClick={() => disconnect(gmailAccount.id)}>Disconnect</button>
+              ) : (
+                <button disabled={busy} onClick={connectGmail}>Connect Gmail</button>
+              )}
             </div>
           </div>
-        ))}
-      </div>
+
+          <div className="row-card">
+            <div className="meta">
+              <strong>Google Calendar</strong>
+              <small>
+                {calendarAccount
+                  ? `Connected as: ${calendarAccount.account_identifier}`
+                  : calendarNeedsPermission
+                    ? "Permission required"
+                    : "Not connected"}
+              </small>
+            </div>
+            {calendarAccount && <span className={`pill ${calendarAccount.status}`}>{calendarAccount.status}</span>}
+            <div className="row-actions">
+              {calendarAccount ? (
+                <button className="ghost" disabled={busy} onClick={() => disconnect(calendarAccount.id)}>Disconnect</button>
+              ) : (
+                <button disabled={busy} onClick={connectCalendar}>Connect Calendar</button>
+              )}
+            </div>
+          </div>
+
+          <div className="connect-form">
+            <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+              <option value="google_drive">Google Drive</option>
+              <option value="slack">Slack</option>
+              <option value="notion">Notion</option>
+            </select>
+            <input placeholder="Account (e.g. name@company.com)" value={identifier} onChange={(e) => setIdentifier(e.target.value)} />
+            <button onClick={connect} disabled={busy}>Connect</button>
+          </div>
+
+          <div className="rows">
+            {otherAccounts.length === 0 && <div className="empty">No other connected accounts yet. Local/demo data is used until you connect one.</div>}
+            {otherAccounts.map((a) => (
+              <div className="row-card" key={a.id}>
+                <div className="meta"><strong>{a.provider}</strong><small>{a.account_identifier}</small></div>
+                <span className={`pill ${a.status}`}>{a.status}</span>
+                <div className="row-actions">
+                  <button className="ghost" disabled={busy || a.status === "disconnected"} onClick={() => disconnect(a.id)}>Disconnect</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </main>
   );
 }
