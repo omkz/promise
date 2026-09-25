@@ -36,7 +36,7 @@ def _config() -> GmailConfig:
 def _provider(ctx, handler) -> GmailIntegrationProvider:
     return GmailIntegrationProvider(
         account_id=ACCOUNT_ID, workspace_id=WORKSPACE, secret_ref=SECRET_REF, secret_store=ctx.secret_store,
-        config=_config(), drafts=ctx.repos.drafts, transport=httpx.MockTransport(handler),
+        config=_config(), drafts=ctx.repos.drafts, documents=ctx.repos.documents, transport=httpx.MockTransport(handler),
     )
 
 
@@ -46,13 +46,25 @@ def _seed_valid_token(ctx, *, expires_in: float = 3600) -> None:
     })
 
 
-def _make_draft(ctx, *, recipient="andi@example.com", subject="Revised proposal", body="See attached."):
+def _make_draft(ctx, *, recipient="andi@example.com", subject="Revised proposal", body="See attached.", attachment_document_id=None):
     from promise_domain.models import Draft
     from promise_shared.ids import new_id
 
-    draft = Draft(id=new_id("draft"), workspace_id=WORKSPACE, recipient=recipient, subject=subject, body=body)
+    draft = Draft(
+        id=new_id("draft"), workspace_id=WORKSPACE, recipient=recipient, subject=subject, body=body,
+        attachment_document_id=attachment_document_id,
+    )
     ctx.repos.drafts.save(draft)
     return draft
+
+
+def _make_document(ctx, *, name="proposal_revised.txt", content_type="text/plain", content_text="Revised proposal content."):
+    from promise_domain.models import Document
+    from promise_shared.ids import new_id
+
+    document = Document(id=new_id("doc"), workspace_id=WORKSPACE, name=name, type=content_type, content_text=content_text)
+    ctx.repos.documents.save(document)
+    return document
 
 
 # ---- search / get -----------------------------------------------------------------------------
@@ -228,6 +240,105 @@ def test_send_message_is_idempotent_when_draft_already_sent(ctx):
     provider = _provider(ctx, handler)
     result = provider.send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
     assert result["idempotent_replay"] is True
+
+
+# ---- send_message with an attachment -------------------------------------------------------------
+
+def test_send_message_with_attachment_builds_a_multipart_message_with_correct_attachment(ctx):
+    import base64
+    import email
+    import json as _json
+
+    _seed_valid_token(ctx)
+    document = _make_document(ctx, name="proposal_revised.txt", content_type="text/plain", content_text="Here is the revised proposal text.")
+    draft = _make_draft(ctx, body="Please see the attached revised proposal.", attachment_document_id=document.id)
+    sent_requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return httpx.Response(200, json={"id": "gmail_sent_2", "threadId": "gmail_thread_2"})
+
+    result = _provider(ctx, handler).send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+    assert result["idempotent_replay"] is False
+
+    body = _json.loads(sent_requests[0].content)
+    mime_message = email.message_from_bytes(base64.urlsafe_b64decode(body["raw"].encode("ascii")))
+
+    assert mime_message.is_multipart()
+    body_part, attachment_part = mime_message.get_payload()
+
+    # body remains correct
+    assert body_part.get_content_type() == "text/plain"
+    assert body_part.get_payload(decode=True).decode("utf-8") == "Please see the attached revised proposal."
+
+    # attachment exists, with the correct filename/content-type/bytes
+    assert attachment_part.get_filename() == "proposal_revised.txt"
+    assert attachment_part.get_content_type() == "text/plain"
+    assert attachment_part.get("Content-Disposition", "").startswith("attachment")
+    assert attachment_part.get_payload(decode=True).decode("utf-8") == "Here is the revised proposal text."
+
+
+def test_send_message_with_attachment_marks_draft_sent_and_returns_provider_ids(ctx):
+    _seed_valid_token(ctx)
+    document = _make_document(ctx)
+    draft = _make_draft(ctx, attachment_document_id=document.id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": "gmail_sent_3", "threadId": "gmail_thread_3"})
+
+    result = _provider(ctx, handler).send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+    assert result["provider_message_id"] == "gmail_sent_3"
+    assert result["draft"]["status"] == "sent"
+
+    reloaded = ctx.repos.drafts.require(WORKSPACE, draft.id)
+    assert reloaded.status == DraftStatus.SENT
+
+
+def test_send_message_with_missing_attachment_document_raises_rather_than_omitting_it(ctx):
+    from promise_shared.errors import NotFoundError
+
+    _seed_valid_token(ctx)
+    draft = _make_draft(ctx, attachment_document_id="doc_does_not_exist")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must never call Gmail when the requested attachment can't be loaded")
+
+    with pytest.raises(NotFoundError):
+        _provider(ctx, handler).send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+
+    reloaded = ctx.repos.drafts.require(WORKSPACE, draft.id)
+    assert reloaded.status != DraftStatus.SENT
+
+
+def test_send_message_with_attachment_is_idempotent_when_already_sent(ctx):
+    _seed_valid_token(ctx)
+    document = _make_document(ctx)
+    draft = _make_draft(ctx, attachment_document_id=document.id)
+    ctx.repos.drafts.update(WORKSPACE, draft.id, lambda d: setattr(d, "status", DraftStatus.SENT))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must never call Gmail again for an already-sent draft, attachment or not")
+
+    result = _provider(ctx, handler).send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+    assert result["idempotent_replay"] is True
+
+
+def test_send_message_never_reads_a_document_other_than_the_drafts_own_attachment(ctx):
+    """The provider has no argument surface for an arbitrary document id -- it can
+    only ever resolve the one id already on the draft it was asked to send."""
+    _seed_valid_token(ctx)
+    other_document = _make_document(ctx, name="unrelated.txt", content_text="not referenced by any draft")
+    draft = _make_draft(ctx, attachment_document_id=None)  # no attachment on this draft
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": "gmail_sent_4", "threadId": "gmail_thread_4"})
+
+    result = _provider(ctx, handler).send_message(WORKSPACE, draft_id=draft.id, idempotency_key="key1")
+    assert result["idempotent_replay"] is False
+    # sanity: the unrelated document was never touched/attached (no attachment sent at all)
+    reloaded = ctx.repos.drafts.require(WORKSPACE, draft.id)
+    assert reloaded.status == DraftStatus.SENT
+    assert other_document.id != draft.attachment_document_id
 
 
 # ---- v1 scope boundary ---------------------------------------------------------------------------

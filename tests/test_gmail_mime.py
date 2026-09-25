@@ -115,3 +115,76 @@ def test_build_raw_send_message_is_valid_base64url_rfc2822():
     assert message["Subject"] == "Revised proposal"
     assert message.get_content_type() == "text/plain"
     assert "Please see attached." in message.get_payload(decode=True).decode("utf-8")
+
+
+# ---- attachments -------------------------------------------------------------------------------
+
+def _decode(raw: str):
+    import email
+
+    return email.message_from_bytes(base64.urlsafe_b64decode(raw.encode("ascii")))
+
+
+def test_build_raw_send_message_with_attachment_is_multipart_mixed():
+    raw = build_raw_send_message(
+        to="andi@example.com", subject="Revised proposal", body="Please see attached.",
+        attachment={"filename": "proposal_revised.txt", "content_type": "text/plain", "content": "Revised proposal text."},
+    )
+    message = _decode(raw)
+
+    assert message.is_multipart()
+    assert message.get_content_type() == "multipart/mixed"
+    assert message["To"] == "andi@example.com"
+    assert message["Subject"] == "Revised proposal"
+
+
+def test_attachment_body_part_preserves_the_plain_text_body():
+    raw = build_raw_send_message(
+        to="andi@example.com", subject="s", body="Please see attached.",
+        attachment={"filename": "f.txt", "content_type": "text/plain", "content": "attachment body"},
+    )
+    message = _decode(raw)
+    body_part = message.get_payload()[0]
+    assert body_part.get_content_type() == "text/plain"
+    assert body_part.get_payload(decode=True).decode("utf-8") == "Please see attached."
+
+
+def test_attachment_part_has_correct_filename_content_type_and_bytes():
+    raw = build_raw_send_message(
+        to="andi@example.com", subject="s", body="body",
+        attachment={"filename": "proposal_revised.txt", "content_type": "text/plain", "content": "Here is the revised text."},
+    )
+    message = _decode(raw)
+    attachment_part = message.get_payload()[1]
+
+    assert attachment_part.get_filename() == "proposal_revised.txt"
+    assert attachment_part.get_content_type() == "text/plain"
+    assert attachment_part.get("Content-Disposition", "").startswith("attachment")
+    assert attachment_part.get_payload(decode=True).decode("utf-8") == "Here is the revised text."
+
+
+def test_attachment_content_type_maintype_subtype_are_split_correctly():
+    raw = build_raw_send_message(
+        to="a@b.com", subject="s", body="body",
+        attachment={"filename": "data.json", "content_type": "application/json", "content": '{"a": 1}'},
+    )
+    attachment_part = _decode(raw).get_payload()[1]
+    assert attachment_part.get_content_maintype() == "application"
+    assert attachment_part.get_content_subtype() == "json"
+
+
+def test_attachment_content_type_falls_back_to_octet_stream_when_malformed():
+    raw = build_raw_send_message(
+        to="a@b.com", subject="s", body="body",
+        attachment={"filename": "f", "content_type": "", "content": "x"},
+    )
+    attachment_part = _decode(raw).get_payload()[1]
+    assert attachment_part.get_content_type() == "application/octet-stream"
+
+
+def test_no_attachment_still_produces_a_plain_text_message():
+    raw = build_raw_send_message(to="a@b.com", subject="s", body="plain body only")
+    message = _decode(raw)
+    assert not message.is_multipart()
+    assert message.get_content_type() == "text/plain"
+    assert message.get_payload(decode=True).decode("utf-8") == "plain body only"

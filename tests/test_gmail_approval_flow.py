@@ -76,6 +76,70 @@ def test_repeated_execution_does_not_send_twice(seeded_ctx):
     assert mock.sent_draft_ids == [handled["draft"]["id"]]  # exactly once, never twice
 
 
+def test_full_flow_attaches_the_revised_document_through_real_gmail_provider(seeded_ctx):
+    """Same end-to-end flow, but through the real GmailIntegrationProvider (httpx.
+    MockTransport-backed) rather than the mock, to prove the planner's revised
+    Document actually ends up as a correctly-attached MIME part when it reaches
+    Gmail's messages.send -- not just that the mock's send_message was called."""
+    import base64
+    import email
+    import json as _json
+    import time
+
+    import httpx
+    from promise_integrations.gmail.config import GmailConfig
+    from promise_integrations.gmail.provider import GmailIntegrationProvider
+
+    ctx = seeded_ctx
+    ws, uid = ctx.default_workspace_id, ctx.default_user_id
+    secret_ref = "gmail:real:1"
+    ctx.secret_store.put_secret(secret_ref, {"access_token": "at_1", "refresh_token": "rt_1", "expires_at": time.time() + 3600})
+
+    account = IntegrationAccount(
+        id=new_id("ia"), workspace_id=ws, user_id=uid, provider="gmail",
+        account_identifier=f"{uid}@example.com", status=IntegrationStatus.CONNECTED, secret_ref=secret_ref,
+    )
+    ctx.repos.integration_accounts.save(account)
+
+    sent_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/gmail/v1/users/me/messages/send":
+            sent_requests.append(request)
+            return httpx.Response(200, json={"id": "gmail_real_1", "threadId": "gmail_real_thread_1"})
+        raise AssertionError(f"unexpected request to {request.url.path}")
+
+    config = GmailConfig(
+        client_id="cid", client_secret="csecret", redirect_uri="https://promise.example/callback",
+        scopes=("https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"),
+        state_ttl_seconds=600,
+    )
+    ctx.integrations.register_factory("gmail", lambda acct: GmailIntegrationProvider(
+        account_id=acct.id, workspace_id=acct.workspace_id, secret_ref=acct.secret_ref, secret_store=ctx.secret_store,
+        config=config, drafts=ctx.repos.drafts, documents=ctx.repos.documents, transport=httpx.MockTransport(handler),
+    ))
+
+    commitment = tools.create_commitment(ctx, workspace_id=ws, user_id=uid, text="I'll send Andi the revised proposal tomorrow morning.")["commitment"]
+    handled = tools.handle_commitment(ctx, workspace_id=ws, user_id=uid, commitment_id=commitment.id)
+    document_id = handled["document"].id
+    document_name = handled["document"].name
+    document_content = handled["document"].content_text
+
+    tools.decide_approval(ctx, workspace_id=ws, approval_id=handled["approval"].id, decision="approved", decided_by=uid)
+    result = tools.execute_approved_action(ctx, workspace_id=ws, action_id=handled["action"].id, actor=uid)
+
+    assert result["action"].status.value == "executed"
+    assert len(sent_requests) == 1
+
+    body = _json.loads(sent_requests[0].content)
+    mime_message = email.message_from_bytes(base64.urlsafe_b64decode(body["raw"].encode("ascii")))
+    assert mime_message.is_multipart()
+    _body_part, attachment_part = mime_message.get_payload()
+    assert attachment_part.get_filename() == document_name
+    assert attachment_part.get_payload(decode=True).decode("utf-8") == document_content
+    assert handled["draft"]["attachment_document_id"] == document_id
+
+
 def test_no_gmail_connection_falls_back_to_local_provider_for_send(seeded_ctx):
     """No connected Gmail account -> execution still works exactly as it did
     before Gmail existed, via the default (local) provider."""

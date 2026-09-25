@@ -620,6 +620,17 @@ always calls the *default* local provider's `create_draft`, never Gmail's).
    rather than a long-lived singleton, a second guard keyed off the `Draft`'s own durable
    `status` (`SENT` -> treated as an idempotent replay, Gmail is never called again for it) —
    covers the "timed out after Gmail may have already accepted it" case specifically.
+   When the `Draft` carries `attachment_document_id` (the planner's revised document; see
+   `send_message_planner.py`), `build_raw_send_message`
+   (`packages/integrations/promise_integrations/gmail/mime.py`) builds a `multipart/mixed`
+   message — a `text/plain` body part plus the document's own `content_text` as an attachment
+   part (filename = `Document.name`, content type = `Document.type`, base64
+   content-transfer-encoded) — instead of a plain `text/plain` message; no attachment means no
+   change from before. The document loaded is always the exact one the draft itself already
+   references, never a caller-supplied id — `GmailIntegrationProvider.send_message` has no
+   argument surface for reading an arbitrary document. Still text content only, since PROMISE
+   doesn't store binary document bytes in v1 (see "Known limitations" — `storage_key`/S3 wiring
+   isn't implemented yet).
 
 **9. Current limitation**: v1 always searches Gmail live, per request — there is no mailbox
    sync/indexing subsystem, and nothing about a connected mailbox is copied into

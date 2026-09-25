@@ -3,8 +3,11 @@ from __future__ import annotations
 import base64
 import re
 from datetime import datetime, timezone
+from email.encoders import encode_base64
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Any
+from typing import Any, TypedDict
 
 _PRESERVED_HEADERS = ("From", "To", "Subject", "Date", "Message-ID")
 
@@ -92,13 +95,45 @@ def normalize_gmail_message(raw: dict[str, Any], *, workspace_id: str) -> dict[s
     }
 
 
-def build_raw_send_message(*, to: str, subject: str, body: str, sender: str | None = None) -> str:
-    """A valid RFC 2822 `text/plain` MIME message, base64url-encoded for the
-    Gmail API's `messages.send` `raw` field -- exactly the shape Google
-    documents (https://developers.google.com/gmail/api/guides/sending),
-    built with the standard library's own MIME writer rather than
-    hand-assembling headers."""
-    message = MIMEText(body, "plain", "utf-8")
+class MessageAttachment(TypedDict):
+    filename: str
+    content_type: str
+    content: str
+    """Text content only -- the only caller, `GmailIntegrationProvider.send_message`,
+    always builds this from `Document.content_text` (PROMISE never stores binary
+    document bytes in v1 -- see `Document`'s own docstring/README "Known limitations")."""
+
+
+def build_raw_send_message(
+    *, to: str, subject: str, body: str, sender: str | None = None, attachment: MessageAttachment | None = None
+) -> str:
+    """A valid RFC 2822 MIME message, base64url-encoded for the Gmail API's
+    `messages.send` `raw` field -- exactly the shape Google documents
+    (https://developers.google.com/gmail/api/guides/sending), built with the
+    standard library's own MIME writer rather than hand-assembling headers.
+
+    No `attachment`: a plain `text/plain` message (unchanged from before
+    attachments existed). With one: `multipart/mixed` -- a `text/plain` body
+    part plus one attachment part, base64 content-transfer-encoded, with a
+    `Content-Disposition: attachment; filename=...` header carrying the
+    document's own name. Never Gmail's own Draft API, never SMTP -- this is
+    only ever handed to `messages.send`'s `raw` field.
+    """
+    message: MIMEText | MIMEMultipart
+    if attachment is None:
+        message = MIMEText(body, "plain", "utf-8")
+    else:
+        message = MIMEMultipart("mixed")
+        message.attach(MIMEText(body, "plain", "utf-8"))
+
+        content_type = attachment["content_type"] or "application/octet-stream"
+        maintype, _, subtype = content_type.partition("/")
+        part = MIMEBase(maintype or "application", subtype or "octet-stream")
+        part.set_payload(attachment["content"].encode("utf-8"))
+        encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=attachment["filename"])
+        message.attach(part)
+
     message["To"] = to
     message["Subject"] = subject
     if sender:

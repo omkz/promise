@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 from promise_domain.enums import DraftStatus
-from promise_domain.models import Draft
+from promise_domain.models import Document, Draft
 from promise_domain.repository import Repository
 from promise_shared.clock import iso_now
 from promise_shared.errors import (
@@ -67,13 +67,15 @@ class GmailIntegrationProvider:
 
     def __init__(
         self, *, account_id: str, workspace_id: str, secret_ref: str, secret_store: SecretStore,
-        config: GmailConfig, drafts: Repository[Draft], transport: httpx.BaseTransport | None = None,
+        config: GmailConfig, drafts: Repository[Draft], documents: Repository[Document],
+        transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._account_id = account_id
         self._workspace_id = workspace_id
         self._secret_ref = secret_ref
         self._secret_store = secret_store
         self._drafts = drafts
+        self._documents = documents
         self._oauth = GoogleOAuthClient(config, transport=transport)
         self._http = httpx.Client(transport=transport, timeout=10.0)
 
@@ -158,12 +160,26 @@ class GmailIntegrationProvider:
         "timed out after Gmail may have already accepted it" scenario; the
         first is `execute_action`'s own `Action.status == EXECUTED` check
         before this method is ever reached at all.
+
+        Attachment: when the draft carries `attachment_document_id`, the
+        referenced `Document` is loaded through `self._documents` -- scoped by
+        `workspace_id` exactly like every other repository call, and it is
+        always the *one* id the draft itself already carries (set only by
+        PROMISE's own planner when the draft was created, never by a caller
+        of this method) -- there is no argument surface here for reading an
+        arbitrary document. Missing means `NotFoundError` (via `.require`),
+        never a silently attachment-less send of a message that asked for one.
         """
         draft = self._drafts.require(workspace_id, draft_id)
         if draft.status == DraftStatus.SENT:
             return {"idempotent_replay": True, "draft": draft.model_dump(mode="json")}
 
-        raw = build_raw_send_message(to=draft.recipient, subject=draft.subject, body=draft.body)
+        attachment = None
+        if draft.attachment_document_id:
+            document = self._documents.require(workspace_id, draft.attachment_document_id)
+            attachment = {"filename": document.name, "content_type": document.type or "text/plain", "content": document.content_text}
+
+        raw = build_raw_send_message(to=draft.recipient, subject=draft.subject, body=draft.body, attachment=attachment)
         resp = self._request("POST", "/users/me/messages/send", json={"raw": raw})
         sent = resp.json()
 

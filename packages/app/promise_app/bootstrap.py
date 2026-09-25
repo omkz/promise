@@ -110,6 +110,7 @@ def _gmail_provider_factory(repos: RepoSet, secret_store: SecretStore):
             secret_store=secret_store,
             config=load_gmail_config(),
             drafts=repos.drafts,
+            documents=repos.documents,
         )
 
     return factory

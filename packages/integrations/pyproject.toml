@@ -1,7 +1,7 @@
 [project]
 name = "promise-integrations"
 version = "0.1.0"
-description = "PROMISE integration provider abstraction + local/demo provider"
+description = "PROMISE integration provider abstraction + local/demo provider + Gmail (OAuth, search/send)"
 requires-python = ">=3.10"
 dependencies = ["promise-domain", "promise-shared", "httpx>=0.28,<1"]
 
