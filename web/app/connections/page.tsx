@@ -33,14 +33,21 @@ function ConnectionsPageContent() {
   }
 
   useEffect(() => {
-    refresh().catch(() => setNotice("Start the backend on port 8000.")).finally(() => setLoading(false));
+    listIntegrations()
+      .then(setAccounts)
+      .catch(() => setNotice("Start the backend on port 8000."))
+      .finally(() => setLoading(false));
   }, []);
 
   // Landed back here from GET /api/integrations/gmail|calendar/callback's redirect --
   // ?gmail=connected|error / ?calendar=connected|error, never a token (see those
-  // routes' own docstrings).
+  // routes' own docstrings). Deriving the toast from the URL after an OAuth redirect has
+  // no render-time equivalent (it's a one-time reaction to navigation, not a value to
+  // compute from current props/state), so this is the documented exception to
+  // react-hooks/set-state-in-effect rather than something to restructure around.
   useEffect(() => {
     const gmail = searchParams.get("gmail");
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (gmail === "connected") { setNotice("Gmail connected."); refresh(); }
     else if (gmail === "error") { setNotice("Couldn't connect Gmail. Please try again."); }
     const calendar = searchParams.get("calendar");

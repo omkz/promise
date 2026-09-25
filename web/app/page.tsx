@@ -29,7 +29,10 @@ export default function Home() {
   }
 
   useEffect(() => {
-    refresh().catch(() => setNotice("Start the backend on port 8000.")).finally(() => setLoading(false));
+    getCommitments()
+      .then(setCommitments)
+      .catch(() => setNotice("Start the backend on port 8000."))
+      .finally(() => setLoading(false));
   }, []);
 
   async function detect() {

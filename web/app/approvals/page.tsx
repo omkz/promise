@@ -24,7 +24,14 @@ export default function ApprovalsPage() {
   }
 
   useEffect(() => {
-    refresh().catch(() => setNotice("Start the backend on port 8000.")).finally(() => setLoading(false));
+    Promise.all([listPendingApprovals(), listActions(), getCommitments()])
+      .then(([pending, allActions, allCommitments]) => {
+        setApprovals(pending);
+        setActions(Object.fromEntries(allActions.map((a) => [a.id, a])));
+        setCommitments(Object.fromEntries(allCommitments.map((c) => [c.id, c])));
+      })
+      .catch(() => setNotice("Start the backend on port 8000."))
+      .finally(() => setLoading(false));
   }, []);
 
   async function approve(a: Approval) {
