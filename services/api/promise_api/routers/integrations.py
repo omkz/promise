@@ -9,13 +9,20 @@ from promise_app import calendar_oauth, gmail_oauth, tools
 from promise_app.bootstrap import AppContext
 from promise_auth import AuthenticatedPrincipal, Permission, require
 from promise_domain.models import IntegrationAccount
-from promise_shared.errors import PromiseError
+from promise_shared.errors import IntegrationInvalidRequest, PromiseError
 from pydantic import BaseModel
 
 from ..deps import get_context, get_principal
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 logger = logging.getLogger("promise.integrations")
+
+# Providers only ever legitimately connected through their own OAuth flow (gmail_connect /
+# calendar_connect below) -- this generic manual endpoint has no way to verify a typed
+# account_identifier actually belongs to the caller, so letting it accept one of these
+# providers would let anyone fabricate a "Connected" gmail/google_calendar account with no
+# real token behind it.
+OAUTH_ONLY_PROVIDERS = frozenset({"gmail", "google_calendar"})
 
 
 class ConnectIntegrationBody(BaseModel):
@@ -37,6 +44,8 @@ def connect_integration(
     body: ConnectIntegrationBody, principal: AuthenticatedPrincipal = Depends(get_principal), ctx: AppContext = Depends(get_context)
 ) -> IntegrationAccount:
     require(principal, Permission.INTEGRATIONS_MANAGE)
+    if body.provider in OAUTH_ONLY_PROVIDERS:
+        raise IntegrationInvalidRequest(body.provider, f"{body.provider} must be connected via its OAuth flow, not this endpoint")
     return tools.connect_integration_account(
         ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, provider=body.provider,
         account_identifier=body.account_identifier, scopes=body.scopes,

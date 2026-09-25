@@ -92,6 +92,28 @@ def test_rest_list_integration_accounts_is_scoped_per_user(seeded_ctx):
         app.dependency_overrides.clear()
 
 
+@pytest.mark.parametrize("provider", ["gmail", "google_calendar"])
+def test_rest_manual_connect_rejects_oauth_only_providers(seeded_ctx, provider):
+    """The generic manual-connect endpoint can't verify a typed account_identifier actually
+    belongs to the caller -- it must not be usable to fabricate a "Connected" gmail/
+    google_calendar account with no real OAuth token behind it (see
+    `promise_api.routers.integrations.OAUTH_ONLY_PROVIDERS`)."""
+    from fastapi.testclient import TestClient
+    from promise_api import deps
+    from promise_api.main import app
+
+    ws = seeded_ctx.default_workspace_id
+    app.dependency_overrides[deps.get_context] = lambda: seeded_ctx
+    try:
+        app.dependency_overrides[deps.get_principal] = lambda: _principal_for(ws, OWNER)
+        client = TestClient(app)
+        r = client.post("/api/integrations", json={"provider": provider, "account_identifier": "fake@example.com"})
+        assert r.status_code == 400
+        assert tools.list_integration_accounts(seeded_ctx, workspace_id=ws, user_id=OWNER) == []
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_rest_disconnect_integration_account_cross_user_is_403(seeded_ctx):
     from fastapi.testclient import TestClient
     from promise_api import deps

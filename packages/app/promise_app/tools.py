@@ -410,7 +410,12 @@ def connect_integration_account(
     ctx: AppContext, *, workspace_id: str, user_id: str, provider: str, account_identifier: str, scopes: list[str] | None = None
 ) -> IntegrationAccount:
     """Record a connected account. Real OAuth token exchange/storage happens outside
-    this function (e.g. in a secrets manager) — only non-secret metadata lands here."""
+    this function (e.g. in a secrets manager) — only non-secret metadata lands here.
+    Callers reachable from an unauthenticated client (the REST router) must reject
+    `OAUTH_ONLY_PROVIDERS` themselves before calling this -- see
+    `promise_api.routers.integrations.connect_integration`. This stays permissive so
+    internal callers (tests, fixtures, future trusted provisioning flows) can still seed
+    any provider's account record directly."""
     account = IntegrationAccount(
         id=new_id("ia"),
         workspace_id=workspace_id,
