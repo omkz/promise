@@ -3,7 +3,7 @@ from __future__ import annotations
 from promise_domain.enums import ActionStatus
 from promise_domain.models import Action
 from promise_shared.clock import iso_now
-from promise_shared.errors import ApprovalRequiredError, DuplicateActionError, IntegrationNotConnected
+from promise_shared.errors import ApprovalRequiredError, ConflictError, DuplicateActionError, IntegrationNotConnected
 
 from ..context import AgentRepos
 
@@ -11,10 +11,26 @@ from ..context import AgentRepos
 def execute_action(action_id: str, workspace_id: str, repos: AgentRepos, *, user_id: str) -> Action:
     """Execute a proposed side effect. Requires ActionStatus.APPROVED.
 
-    Guards against duplicate execution two ways: the domain-level status
-    check here (an EXECUTED action can never be executed again) and the
-    integration provider's own idempotency_key check (protects against a
-    retry after a timed-out response, per the reliability requirement).
+    Guards against duplicate execution three ways, from outermost to
+    innermost: the domain-level status check right below (an already-EXECUTED
+    action never even attempts the claim below), the atomic APPROVED ->
+    EXECUTING claim right after it, and the integration provider's own
+    idempotency_key check (protects against a retry after a timed-out
+    response, per the reliability requirement -- see e.g.
+    `GmailIntegrationProvider.send_message`'s own SENDING claim, the same
+    pattern one layer down).
+
+    The claim is the one that actually matters under real concurrency: two
+    callers racing to execute the *same* action can both pass the first
+    check (both read APPROVED), but `Repository.update(...,
+    expected_status=ActionStatus.APPROVED)` is an atomic compare-and-set (see
+    that method's docstring) -- only one caller's write can succeed against
+    the row as it *actually* is at write time, not as either caller happened
+    to read it. The loser's `Repository.update` raises `ConflictError`,
+    translated to `DuplicateActionError` here (the existing, already-tested
+    error for "this action is already being/has been handled") rather than
+    ever reaching `provider.send_message`/`calendar.create_event` at all --
+    the side effect itself is never attempted twice for the same action.
 
     `user_id` (the caller executing the action -- already ownership-verified
     by `tools.execute_approved_action` before this is ever reached) selects
@@ -31,12 +47,24 @@ def execute_action(action_id: str, workspace_id: str, repos: AgentRepos, *, user
     docstring) — this only changes who actually delivers/creates it.
     """
     action = repos.actions.require(workspace_id, action_id)
-    if action.status == ActionStatus.EXECUTED:
+    if action.status in (ActionStatus.EXECUTED, ActionStatus.EXECUTING):
+        # EXECUTING means some other caller's claim (below) is already in flight for
+        # this exact action -- that's "already being/has been handled", the same
+        # DuplicateActionError an EXECUTED action gets, never ApprovalRequiredError
+        # (which would misleadingly suggest this action was never approved at all).
         raise DuplicateActionError(action_id)
     if action.status != ActionStatus.APPROVED:
         raise ApprovalRequiredError(action_id)
 
-    repos.actions.update(workspace_id, action_id, lambda a: setattr(a, "status", ActionStatus.EXECUTING))
+    try:
+        repos.actions.update(
+            workspace_id, action_id, lambda a: setattr(a, "status", ActionStatus.EXECUTING),
+            expected_status=ActionStatus.APPROVED,
+        )
+    except ConflictError as exc:
+        # Someone else (a concurrent call, or a retry that's already in flight/done) won
+        # the claim -- never attempt the side effect ourselves.
+        raise DuplicateActionError(action_id) from exc
 
     try:
         if action.type.value == "send_message":
@@ -69,7 +97,8 @@ def execute_action(action_id: str, workspace_id: str, repos: AgentRepos, *, user
         # correctly) — capture the message as a plain local first.
         error_message = str(exc)
         return repos.actions.update(
-            workspace_id, action_id, lambda a: (setattr(a, "status", ActionStatus.FAILED), setattr(a, "error", error_message))
+            workspace_id, action_id, lambda a: (setattr(a, "status", ActionStatus.FAILED), setattr(a, "error", error_message)),
+            expected_status=ActionStatus.EXECUTING,
         )
 
     return repos.actions.update(
@@ -80,4 +109,5 @@ def execute_action(action_id: str, workspace_id: str, repos: AgentRepos, *, user
             setattr(a, "result", result),
             setattr(a, "executed_at", iso_now()),
         ),
+        expected_status=ActionStatus.EXECUTING,
     )
