@@ -1,0 +1,225 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Least-privilege IAM for PROMISE's AWS deployment. One role (PromiseRuntimeRole) is
+  shared between services/api's App Runner instance and services/mcp's AgentCore Runtime
+  execution -- both need identical access to this app's own AWS resources (DynamoDB, S3,
+  Secrets Manager, Bedrock), so one role with a multi-principal trust policy avoids
+  duplicating that policy under two names. AgentCore additionally needs its own
+  platform-level permissions (ECR pull for itself, its CloudWatch Logs group, X-Ray,
+  workload access tokens) attached to the SAME role as a second, separate policy, since App
+  Runner doesn't need any of those. Depends on the storage stack's exports (same
+  EnvironmentName) for the exact table/bucket ARNs -- never a hard-coded ARN.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Must match the EnvironmentName used for the storage stack this imports
+      DynamoDB/S3 ARNs from.
+    AllowedPattern: "[a-zA-Z0-9-]+"
+
+  AgentRuntimeName:
+    Type: String
+    Default: promise_mcp
+    Description: Must match AgentRuntimeName on the AgentCore runtime stack -- scopes the
+      CloudWatch Logs / workload-identity permissions to this runtime only.
+
+  DocumentsPrefix:
+    Type: String
+    Default: documents/
+    Description: Must match S3_DOCUMENTS_PREFIX on every service -- scopes S3 access to
+      just this prefix within the bucket.
+
+  SecretsManagerPrefix:
+    Type: String
+    Default: promise/
+    Description: Must match SECRETS_MANAGER_PREFIX on every service -- scopes Secrets
+      Manager access to just this name prefix.
+
+Resources:
+  PromiseRuntimeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "PromiseRuntime-${EnvironmentName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AppRunnerTasksTrust
+            Effect: Allow
+            Principal:
+              Service: tasks.apprunner.amazonaws.com
+            Action: sts:AssumeRole
+          - Sid: AgentCoreTrust
+            Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*"
+      Policies:
+        - PolicyName: PromiseAppAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: DynamoDbTableAndIndexAccess
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !ImportValue
+                    Fn::Sub: "Promise-${EnvironmentName}-TableArn"
+                  - !ImportValue
+                    Fn::Sub: "Promise-${EnvironmentName}-UserOwnedIndexArn"
+              - Sid: S3DocumentArtifactAccess
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                Resource: !Sub
+                  - "${BucketArn}/${DocumentsPrefix}*"
+                  - BucketArn:
+                      Fn::ImportValue: !Sub "Promise-${EnvironmentName}-BucketArn"
+              - Sid: SecretsManagerIntegrationTokenAccess
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DeleteSecret
+                Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretsManagerPrefix}*"
+              - Sid: BedrockModelInvocation
+                Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+        - PolicyName: AgentCorePlatformAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ECRImageAccess
+                Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !Sub "arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/*"
+              - Sid: ECRTokenAccess
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: LogGroupAccess
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogStreams
+                  - logs:CreateLogGroup
+                  - logs:DescribeLogGroups
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*"
+              - Sid: LogResourcePolicyAccess
+                Effect: Allow
+                Action: logs:PutResourcePolicy
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/${AgentRuntimeName}-*"
+              - Sid: LogStreamWrite
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*"
+              - Sid: XRayTracing
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: "*"
+              - Sid: AgentCoreMetrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: bedrock-agentcore
+              - Sid: GetAgentAccessToken
+                Effect: Allow
+                Action:
+                  - bedrock-agentcore:GetWorkloadAccessToken
+                  - bedrock-agentcore:GetWorkloadAccessTokenForJWT
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default"
+                  - !Sub "arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default/workload-identity/${AgentRuntimeName}-*"
+              - Sid: AgentCoreBedrockModelInvocation
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:*"
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: promise
+
+  AppRunnerEcrAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "PromiseAppRunnerEcrAccess-${EnvironmentName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: build.apprunner.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess"
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: promise
+
+  GsiMigrationPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "PromiseGsiMigration-${EnvironmentName}"
+      Description: >
+        Attach to an operator's own IAM user/role before running
+        infra/deploy_gsi.py -- never attach to a service's own runtime role
+        (see PromiseRuntimeRole above, which deliberately excludes these).
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DynamoDbGsiMigration
+            Effect: Allow
+            Action:
+              - dynamodb:DescribeTable
+              - dynamodb:UpdateTable
+              - dynamodb:UpdateItem
+              - dynamodb:Scan
+            Resource:
+              - !ImportValue
+                Fn::Sub: "Promise-${EnvironmentName}-TableArn"
+              - !ImportValue
+                Fn::Sub: "Promise-${EnvironmentName}-UserOwnedIndexArn"
+
+Outputs:
+  RuntimeRoleArn:
+    Value: !GetAtt PromiseRuntimeRole.Arn
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-RuntimeRoleArn"
+  AppRunnerEcrAccessRoleArn:
+    Value: !GetAtt AppRunnerEcrAccessRole.Arn
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-AppRunnerEcrAccessRoleArn"
+  GsiMigrationPolicyArn:
+    Value: !Ref GsiMigrationPolicy
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-GsiMigrationPolicyArn"
