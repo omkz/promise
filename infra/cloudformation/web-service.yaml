@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  web (Next.js) as an AWS App Runner service -- HTTPS, no separate hosting paradigm
+  (Amplify) alongside the api/mcp App Runner-based deployment, one mental model for the
+  whole stack. Gets NO AWS IAM permissions at all (no InstanceRoleArn) -- it's a pure
+  frontend that only calls services/api over HTTPS, never AWS APIs directly.
+
+  IMPORTANT: NEXT_PUBLIC_* variables are inlined into the client bundle at `next build`
+  time, not read at container-start time -- there is nothing this stack's environment
+  configuration could set to change them after the fact. The image referenced here must
+  already have been built with `--build-arg NEXT_PUBLIC_API_URL=<the real API URL>` (see
+  web/Dockerfile and the deployment guide).
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedPattern: "[a-zA-Z0-9-]+"
+
+  WebImageIdentifier:
+    Type: String
+    Description: >
+      Full ECR image URI including tag, e.g. the WebRepositoryUri output from ecr.yaml
+      plus a unique tag -- must already be pushed, built with the real API URL baked in
+      via --build-arg, before this stack is created or updated to reference it.
+
+  Cpu:
+    Type: String
+    Default: "256"
+    AllowedValues: ["256", "512", "1024", "2048", "4096"]
+  Memory:
+    Type: String
+    Default: "512"
+    AllowedValues: ["512", "1024", "2048", "3072", "4096", "6144", "8192", "10240", "12288"]
+
+Resources:
+  WebService:
+    Type: AWS::AppRunner::Service
+    Properties:
+      ServiceName: !Sub "promise-web-${EnvironmentName}"
+      SourceConfiguration:
+        AutoDeploymentsEnabled: false
+        AuthenticationConfiguration:
+          AccessRoleArn:
+            Fn::ImportValue: !Sub "Promise-${EnvironmentName}-AppRunnerEcrAccessRoleArn"
+        ImageRepository:
+          ImageIdentifier: !Ref WebImageIdentifier
+          ImageRepositoryType: ECR
+          ImageConfiguration:
+            Port: "3000"
+      InstanceConfiguration:
+        Cpu: !Ref Cpu
+        Memory: !Ref Memory
+      HealthCheckConfiguration:
+        Protocol: TCP
+        Interval: 10
+        Timeout: 5
+        HealthyThreshold: 1
+        UnhealthyThreshold: 5
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: promise
+
+Outputs:
+  ServiceUrl:
+    Description: HTTPS URL App Runner provisions automatically for this service.
+    Value: !Sub "https://${WebService.ServiceUrl}"
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-WebServiceUrl"
+  ServiceArn:
+    Value: !GetAtt WebService.ServiceArn
