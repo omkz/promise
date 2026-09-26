@@ -85,3 +85,27 @@ def test_bedrock_converse_passes_the_shared_retry_config_to_boto3_client(monkeyp
     llm.bedrock_converse("prompt")
 
     assert calls[0]["config"].retries["mode"] == "standard"
+
+
+def test_commitment_extraction_bedrock_provider_passes_the_shared_retry_config(monkeypatch):
+    import boto3
+    from promise_agent.commitment_extraction.provider import BedrockCommitmentExtractionProvider
+
+    calls: list[dict] = []
+
+    class _FakeClient:
+        def converse(self, **kwargs):
+            return {"output": {"message": {"content": []}}}  # no toolUse -> extract() raises, which is fine here
+
+    def fake_client(*args, **kwargs):
+        calls.append(kwargs)
+        return _FakeClient()
+
+    monkeypatch.setattr(boto3, "client", fake_client)
+    provider = BedrockCommitmentExtractionProvider()
+    try:
+        provider.extract("I'll send the report tomorrow")
+    except Exception:
+        pass  # only the boto3.client(...) call kwargs are under test here
+
+    assert calls[0]["config"].retries["mode"] == "standard"

@@ -208,11 +208,12 @@ class BedrockCommitmentExtractionProvider:
     def extract(self, text: str) -> RawCommitmentExtraction:
         try:
             import boto3
+            from promise_shared.aws_config import boto_config
         except ImportError as exc:
             raise ExtractionProviderError(self.provider_name, f"boto3 is not available: {exc}", retryable=False) from exc
 
         try:
-            client = boto3.client("bedrock-runtime", region_name=self._region)
+            client = boto3.client("bedrock-runtime", region_name=self._region, config=boto_config())
             tool_spec = {
                 "toolSpec": {
                     "name": "record_commitment_extraction",
