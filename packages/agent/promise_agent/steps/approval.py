@@ -20,6 +20,19 @@ def request_approval(action_id: str, workspace_id: str, repos: AgentRepos) -> Ap
 def decide_approval(
     approval_id: str, workspace_id: str, decision: ApprovalStatus, decided_by: str, repos: AgentRepos, note: str | None = None
 ) -> Approval:
+    """PENDING -> APPROVED / PENDING -> REJECTED, and never anything else: both
+    APPROVED and REJECTED are terminal. `expected_status=ApprovalStatus.PENDING`
+    below makes this an atomic compare-and-set (see `Repository.update`'s own
+    docstring) -- a decision only ever succeeds against an approval that is
+    *still* PENDING at the moment of the write, not just at the moment we
+    happened to read it, so two concurrent `decide_approval` calls for the same
+    approval (a double-click, a retried request, an approve and a reject racing
+    each other) can never both land: exactly one wins, the other raises
+    `ConflictError` -- the existing convention for "this state has already moved
+    on" (see `Repository.update`), mapped to HTTP 409 by the API layer already.
+    Repeated identical decisions are rejected the same way as a conflicting one,
+    not silently treated as a no-op success -- matching `execute_action`'s own
+    existing convention for an already-executed action."""
     if decision not in (ApprovalStatus.APPROVED, ApprovalStatus.REJECTED):
         raise ValueError("decision must be 'approved' or 'rejected'")
 
@@ -32,6 +45,7 @@ def decide_approval(
             setattr(a, "decided_at", iso_now()),
             setattr(a, "note", note),
         ),
+        expected_status=ApprovalStatus.PENDING,
     )
     new_action_status = ActionStatus.APPROVED if decision == ApprovalStatus.APPROVED else ActionStatus.REJECTED
     repos.actions.update(workspace_id, approval.action_id, lambda a: setattr(a, "status", new_action_status))
