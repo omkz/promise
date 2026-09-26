@@ -41,5 +41,17 @@ COPY --from=ui-build /ui/dist services/mcp/ui/commitment-card/dist
 RUN uv sync --locked --no-dev --package promise-service-mcp
 
 ENV LOCAL_DATA_DIR=/app/data
+# Amazon Bedrock AgentCore Runtime's documented MCP container contract requires the
+# server to listen on 0.0.0.0:8000 and serve the streamable-HTTP endpoint at /mcp (the
+# mcp SDK's own default path, unchanged here) -- baked in as image defaults, not left to
+# whatever orchestrator runs this container, so the image is correct standalone. `HOST`
+# also feeds mcp.server.mcpserver's own DNS-rebinding auto-protection (see
+# services/mcp/promise_mcp/server.py): it only restricts allowed Hosts/Origins to
+# loopback when HOST is itself a loopback address, so 0.0.0.0 here is required for
+# AgentCore's proxied requests (a non-loopback Host header) to ever be accepted, not just
+# for the socket bind. docker-compose.yml already overrides both for local multi-service
+# dev; these are what a bare `docker run`/AgentCore Runtime gets with no overrides.
+ENV HOST=0.0.0.0
+ENV PORT=8000
 EXPOSE 8000
 CMD ["uv", "run", "--no-sync", "python", "-m", "promise_mcp.server"]
