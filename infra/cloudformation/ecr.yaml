@@ -2,8 +2,11 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   ECR repositories for the three PROMISE container images (services/api,
   services/mcp, web) -- one stack, three repos, so image build/push scripting only has
-  one set of URIs to look up. Scan-on-push and an untagged-image lifecycle policy are the
-  only opinions this template has; nothing else is prescribed. Safe to re-apply.
+  one set of URIs to look up. Tags are IMMUTABLE (a once-pushed tag can never be
+  overwritten, only a new tag pushed) -- push each build under a unique tag (e.g. a git
+  short SHA), never reuse ":latest"; see the deployment guide's exact push commands.
+  Scan-on-push and an untagged-image lifecycle policy are the only other opinions this
+  template has. Safe to re-apply.
 
 Parameters:
   EnvironmentName:
@@ -24,6 +27,7 @@ Resources:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Sub "promise-${EnvironmentName}/api"
+      ImageTagMutability: IMMUTABLE
       ImageScanningConfiguration:
         ScanOnPush: true
       EmptyOnDelete: true
@@ -47,6 +51,7 @@ Resources:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Sub "promise-${EnvironmentName}/mcp"
+      ImageTagMutability: IMMUTABLE
       ImageScanningConfiguration:
         ScanOnPush: true
       EmptyOnDelete: true
@@ -70,6 +75,7 @@ Resources:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Sub "promise-${EnvironmentName}/web"
+      ImageTagMutability: IMMUTABLE
       ImageScanningConfiguration:
         ScanOnPush: true
       EmptyOnDelete: true
