@@ -1,0 +1,117 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  PROMISE application state storage -- the DynamoDB table (with the UserOwnedIndex GSI
+  every deploy needs, per infra/README.md point 1a) and the S3 bucket for document binary
+  artifacts. Mirrors packages/shared/promise_shared/store/dynamodb_schema.py exactly (that
+  module is this repo's own source of truth for the index's shape) so this template and the
+  application code can never drift silently. No secrets, account IDs, or regions are
+  hard-coded -- everything resource-specific comes from parameters or CloudFormation
+  pseudo parameters. Safe to re-apply: `aws cloudformation deploy` only changes what
+  actually differs.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Logical environment name (dev/staging/prod/...), used for tagging and as
+      the shared key other Promise stacks use to import this stack's exports.
+    AllowedPattern: "[a-zA-Z0-9-]+"
+
+  TableName:
+    Type: String
+    Default: PROMISE
+    Description: DynamoDB table name -- must match DYNAMODB_TABLE on every service that
+      reads this table.
+
+  DocumentsBucketName:
+    Type: String
+    Description: >
+      S3 bucket name for document binary artifacts (Document.storage_key -- see the root
+      README's "Document storage" section). S3 bucket names are globally unique across ALL
+      AWS accounts, so there is no safe default; pick one, e.g.
+      promise-documents-<your-account-id>-<region>.
+    AllowedPattern: "[a-z0-9.-]{3,63}"
+
+Resources:
+  PromiseTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: UserOwnedIndex
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes: [data]
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: promise
+
+  DocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref DocumentsBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: promise
+
+Outputs:
+  TableName:
+    Value: !Ref PromiseTable
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-TableName"
+  TableArn:
+    Value: !GetAtt PromiseTable.Arn
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-TableArn"
+  UserOwnedIndexArn:
+    Value: !Sub "${PromiseTable.Arn}/index/UserOwnedIndex"
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-UserOwnedIndexArn"
+  BucketName:
+    Value: !Ref DocumentsBucket
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-BucketName"
+  BucketArn:
+    Value: !GetAtt DocumentsBucket.Arn
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-BucketArn"
