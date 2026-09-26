@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 from promise_domain.enums import ActionStatus
 from promise_domain.models import Action
@@ -37,6 +39,38 @@ def test_local_store_put_raises_conflict_for_missing_row(tmp_path):
     store = LocalJsonEntityStore(str(tmp_path))
     with pytest.raises(ConflictError):
         store.put("action", {"id": "never_written", "workspace_id": "ws_1", "status": "executing"}, expected_status="approved")
+
+
+def test_local_store_put_is_atomic_under_a_genuine_concurrent_race(tmp_path):
+    """Two real OS threads, not just two sequential calls -- both read "approved" is
+    still true (unsynchronized, optimistic), then both race to claim it via
+    `expected_status="approved"`. The RLock held for the full check-then-write in
+    `LocalJsonEntityStore.put` (not just around `_read()`/`_write()` individually) is
+    what must make exactly one of them win regardless of real thread scheduling."""
+    store = LocalJsonEntityStore(str(tmp_path))
+    store.put("action", {"id": "act_1", "workspace_id": "ws_1", "status": "approved"})
+
+    outcomes: dict[int, object] = {}
+
+    def claim(i: int) -> None:
+        try:
+            outcomes[i] = store.put(
+                "action", {"id": "act_1", "workspace_id": "ws_1", "status": "executing"}, expected_status="approved"
+            )
+        except ConflictError as exc:
+            outcomes[i] = exc
+
+    threads = [threading.Thread(target=claim, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    successes = [v for v in outcomes.values() if not isinstance(v, ConflictError)]
+    failures = [v for v in outcomes.values() if isinstance(v, ConflictError)]
+    assert len(successes) == 1
+    assert len(failures) == 7
+    assert store.get("action", "ws_1", "act_1")["status"] == "executing"
 
 
 # ---- DynamoEntityStore (hand-written fake boto3 Table, no live AWS) ------------------------------
