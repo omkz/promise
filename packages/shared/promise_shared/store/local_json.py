@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from threading import RLock
 
+from promise_shared.errors import ConflictError
+
 from .index_keys import USER_OWNED_ENTITIES, USER_OWNED_INDEX, user_owned_index_keys
 
 
@@ -34,17 +36,30 @@ class LocalJsonEntityStore:
         with self._lock:
             self.file.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    def put(self, entity: str, item: dict) -> dict:
+    def put(self, entity: str, item: dict, *, expected_status: str | None = None) -> dict:
         if "id" not in item or "workspace_id" not in item:
             raise ValueError("entity rows must include 'id' and 'workspace_id'")
         with self._lock:
+            # The entire read-check-write sequence below runs under this one lock
+            # acquisition -- not `_read()`/`_write()`'s own (separate) internal
+            # locking -- so a concurrent `put()` from another thread can never
+            # observe or act on a state between our check and our write. That's
+            # what makes `expected_status` a real atomic compare-and-set here,
+            # not just an optimistic pre-check.
             data = self._read()
             rows = data.setdefault(entity, [])
             for i, row in enumerate(rows):
                 if row.get("id") == item["id"]:
+                    if expected_status is not None and row.get("status") != expected_status:
+                        raise ConflictError(
+                            f"{entity} '{item['id']}' is not in the expected state "
+                            f"(expected status {expected_status!r}, found {row.get('status')!r})"
+                        )
                     rows[i] = item
                     break
             else:
+                if expected_status is not None:
+                    raise ConflictError(f"{entity} '{item['id']}' not found for conditional update")
                 rows.append(item)
             self._write(data)
         return item

@@ -14,6 +14,14 @@ T = TypeVar("T", bound=BaseModel)
 logger = logging.getLogger(__name__)
 
 
+def _status_value(status: Any) -> Any:
+    """Normalize a status for comparison -- an enum member's own `.value` (a
+    plain string, matching what `model_dump(mode="json")` and every store
+    backend's `data`/`status` attribute already serialize to) or the value
+    itself if it's already plain."""
+    return status.value if hasattr(status, "value") else status
+
+
 class Repository(Generic[T]):
     """Workspace-scoped CRUD over a typed domain model, backed by an EntityStore.
 
@@ -29,8 +37,11 @@ class Repository(Generic[T]):
         # USER_OWNED_ENTITIES` (see repos.py) -- gates `list_user_owned` below.
         self._user_index = user_index
 
-    def save(self, item: T) -> T:
-        self._store.put(self._entity, item.model_dump(mode="json"))
+    def save(self, item: T, *, expected_status: Any | None = None) -> T:
+        self._store.put(
+            self._entity, item.model_dump(mode="json"),
+            expected_status=_status_value(expected_status) if expected_status is not None else None,
+        )
         return item
 
     def get(self, workspace_id: str, item_id: str) -> T | None:
@@ -109,18 +120,40 @@ class Repository(Generic[T]):
         mutate: Callable[[T], None],
         *,
         expected_version: int | None = None,
+        expected_status: Any | None = None,
     ) -> T:
+        """`expected_status`, when given, makes this a real atomic state-machine
+        transition rather than a plain read-then-write: the item must currently
+        have this status (checked here, for a clear, immediate error on the
+        common non-racing case), *and* the underlying write is conditioned on
+        that same status still holding at write time (`EntityStore.put`'s own
+        `ConditionExpression`/lock) -- so a second caller racing to make the same
+        transition concurrently can never both succeed, even though both may
+        have read the pre-transition status. Raises `ConflictError` either way
+        (fast pre-check or lost race) -- callers that need a different, more
+        specific exception (e.g. `DuplicateActionError`) catch `ConflictError`
+        and re-raise it themselves; this method stays domain-model-agnostic.
+
+        `expected_version` (Commitment's own, older optimistic-concurrency
+        convention) is unrelated and unchanged -- still an app-level-only
+        pre-check, not pushed down to the store."""
         item = self.require(workspace_id, item_id)
         if expected_version is not None:
             current_version = getattr(item, "version", None)
             if current_version is not None and current_version != expected_version:
                 raise ConflictError(f"{self._entity} '{item_id}' version mismatch")
+        current_status = getattr(item, "status", None)
+        if expected_status is not None and _status_value(current_status) != _status_value(expected_status):
+            raise ConflictError(
+                f"{self._entity} '{item_id}' is not in the expected state "
+                f"(expected {_status_value(expected_status)!r}, found {_status_value(current_status)!r})"
+            )
         mutate(item)
         if "version" in self._model.model_fields:
             setattr(item, "version", getattr(item, "version") + 1)
         if "updated_at" in self._model.model_fields:
             setattr(item, "updated_at", iso_now())
-        return self.save(item)
+        return self.save(item, expected_status=current_status if expected_status is not None else None)
 
     def soft_delete(self, workspace_id: str, item_id: str) -> None:
         if "deleted_at" not in self._model.model_fields:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from promise_shared.errors import ConflictError
+
 from .index_keys import USER_OWNED_ENTITIES, user_owned_index_keys
 
 
@@ -39,7 +41,7 @@ class DynamoEntityStore:
     def _keys(entity: str, workspace_id: str, item_id: str) -> tuple[str, str]:
         return f"WORKSPACE#{workspace_id}", f"{entity.upper()}#{item_id}"
 
-    def put(self, entity: str, item: dict) -> dict:
+    def put(self, entity: str, item: dict, *, expected_status: str | None = None) -> dict:
         if "id" not in item or "workspace_id" not in item:
             raise ValueError("entity rows must include 'id' and 'workspace_id'")
         pk, sk = self._keys(entity, item["workspace_id"], item["id"])
@@ -47,7 +49,30 @@ class DynamoEntityStore:
         if entity in USER_OWNED_ENTITIES and item.get("user_id"):
             gsi_pk, gsi_sk = user_owned_index_keys(entity, item["workspace_id"], item["user_id"], item.get("created_at", ""), item["id"])
             row["GSI1PK"], row["GSI1SK"] = gsi_pk, gsi_sk
-        self.table.put_item(Item=row)
+        if "status" in item:
+            # Promoted to a top-level attribute (in addition to living inside the
+            # opaque `data` blob, unchanged) purely so `expected_status` below has
+            # something DynamoDB can evaluate a ConditionExpression against --
+            # `data` itself is a JSON string DynamoDB can't look inside. Written
+            # unconditionally (whether or not this particular call passes
+            # `expected_status`) so it's always up to date for the *next* call
+            # that does.
+            row["status"] = item["status"]
+        put_kwargs: dict[str, Any] = {"Item": row}
+        if expected_status is not None:
+            from boto3.dynamodb.conditions import Attr
+
+            put_kwargs["ConditionExpression"] = Attr("status").eq(expected_status)
+        try:
+            self.table.put_item(**put_kwargs)
+        except Exception as exc:
+            from botocore.exceptions import ClientError
+
+            if isinstance(exc, ClientError) and exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                raise ConflictError(
+                    f"{entity} '{item['id']}' is not in the expected state (expected status {expected_status!r})"
+                ) from exc
+            raise
         return item
 
     def get(self, entity: str, workspace_id: str, item_id: str) -> dict | None:

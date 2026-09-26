@@ -17,7 +17,19 @@ class EntityStore(Protocol):
     workspace_id + id".
     """
 
-    def put(self, entity: str, item: dict) -> dict: ...
+    def put(self, entity: str, item: dict, *, expected_status: str | None = None) -> dict:
+        """Write `item`. When `expected_status` is given, this must be an atomic
+        compare-and-set: the write only succeeds if the row *currently persisted*
+        under this entity/id still has `status == expected_status` -- checked and
+        written as one atomic operation at the store level (DynamoDB's own
+        `ConditionExpression`; a lock held for the full check-then-write on the
+        local backend), never a read-then-write race window. Raises
+        `promise_shared.errors.ConflictError` when the condition fails (the row's
+        status has already moved on). This is the primitive
+        `Repository.update(..., expected_status=...)` is built on -- see that
+        method's docstring for why callers should go through it rather than this
+        directly."""
+        ...
 
     def get(self, entity: str, workspace_id: str, item_id: str) -> dict | None: ...
 
