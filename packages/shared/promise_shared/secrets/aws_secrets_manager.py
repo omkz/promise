@@ -19,7 +19,9 @@ class AwsSecretsManagerStore:
     def __init__(self, region: str, name_prefix: str = "promise/") -> None:
         import boto3
 
-        self._client = boto3.client("secretsmanager", region_name=region)
+        from ..aws_config import boto_config
+
+        self._client = boto3.client("secretsmanager", region_name=region, config=boto_config())
         self._name_prefix = name_prefix
 
     def _name(self, ref: str) -> str:

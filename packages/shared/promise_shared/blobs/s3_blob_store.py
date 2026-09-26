@@ -26,7 +26,9 @@ class S3BlobStore:
     def __init__(self, bucket: str, region: str, key_prefix: str = "documents/") -> None:
         import boto3
 
-        self._client = boto3.client("s3", region_name=region)
+        from ..aws_config import boto_config
+
+        self._client = boto3.client("s3", region_name=region, config=boto_config())
         self._bucket = bucket
         self._key_prefix = key_prefix
 

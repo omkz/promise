@@ -45,11 +45,12 @@ def bedrock_converse(prompt: str) -> str:
     returns `None` or a fabricated response."""
     try:
         import boto3
+        from promise_shared.aws_config import boto_config
     except ImportError as exc:
         raise LLMProviderError("bedrock", f"boto3 is not available: {exc}", retryable=False) from exc
 
     try:
-        client = boto3.client("bedrock-runtime", region_name=os.getenv("AWS_REGION", "us-east-1"))
+        client = boto3.client("bedrock-runtime", region_name=os.getenv("AWS_REGION", "us-east-1"), config=boto_config())
         response = client.converse(
             modelId=os.getenv("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0"),
             messages=[{"role": "user", "content": [{"text": prompt}]}],

@@ -30,8 +30,10 @@ class DynamoEntityStore:
     def __init__(self, table_name: str, region: str) -> None:
         import boto3
 
+        from ..aws_config import boto_config
+
         self._boto3 = boto3
-        self.table = boto3.resource("dynamodb", region_name=region).Table(table_name)
+        self.table = boto3.resource("dynamodb", region_name=region, config=boto_config()).Table(table_name)
 
     @staticmethod
     def _keys(entity: str, workspace_id: str, item_id: str) -> tuple[str, str]:
