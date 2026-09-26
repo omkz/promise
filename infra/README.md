@@ -81,4 +81,29 @@
    it, never a raw token. See the root README's "Gmail Integration" section (points 3-6) for
    OAuth credential setup, required scopes, and the full connect/callback flow.
 
+8. **IAM permissions.** Two ready-to-fill policy documents live next to this file:
+   - `infra/iam-app-runtime-policy.json` -- attach to whatever role `services/api` and
+     `services/mcp` actually run as (e.g. an ECS task role); both point at the same table
+     (see point 4), so both use this same policy. Scoped to exactly what the application
+     code calls: `dynamodb:GetItem/PutItem/DeleteItem/Query/Scan` on the table *and* the
+     `UserOwnedIndex` GSI (`Scan` is required here, not just for `infra/deploy_gsi.py` --
+     `promise_app.identity`/`repos.py` call `EntityStore.query_all` on real request paths
+     for user/workspace-membership/workspace lookups); `s3:PutObject/GetObject/DeleteObject`
+     scoped to the `S3_DOCUMENTS_PREFIX` prefix only; `secretsmanager:GetSecretValue/
+     PutSecretValue/CreateSecret/DeleteSecret` scoped to the `SECRETS_MANAGER_PREFIX`
+     prefix only; `bedrock:InvokeModel` (covers the Converse API used by
+     `promise_agent.llm.bedrock_converse` -- see AWS's own Bedrock IAM reference). Deliberately
+     excludes `dynamodb:UpdateItem`/`UpdateTable`/`DescribeTable` -- the running app never
+     calls those.
+   - `infra/iam-migration-policy.json` -- the extra, deploy-time-only permissions
+     (`DescribeTable`/`UpdateTable`/`UpdateItem`/`Scan`) needed only by whoever actually runs
+     `infra/deploy_gsi.py`; never attach this to the app's own running role.
+
+   Every boto3 client the app constructs (DynamoDB, S3, Secrets Manager, Bedrock) also uses a
+   shared "standard" retry-mode config (`promise_shared.aws_config.boto_config()`,
+   `AWS_MAX_RETRY_ATTEMPTS` env var, default 5 total attempts) instead of boto3's default
+   "legacy" mode -- no IAM implication, just worth knowing when reading CloudWatch logs for a
+   deployed environment: a transient throttle/5xx is retried with backoff before it ever
+   surfaces as an error.
+
 See the official AWS AgentCore MCP runtime documentation for the current deployment contract.

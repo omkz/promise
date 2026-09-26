@@ -1,0 +1,57 @@
+{
+  "_comment": [
+    "Least-privilege IAM policy for the role services/api and services/mcp run as in a real",
+    "deployment (e.g. an ECS task role) -- both point at the same DynamoDB table (see",
+    "infra/README.md point 4), so both attach this same policy. Replace <REGION>,",
+    "<ACCOUNT_ID>, <TABLE_NAME> (DYNAMODB_TABLE, default PROMISE), <BUCKET> (S3_BUCKET),",
+    "<DOCUMENTS_PREFIX> (S3_DOCUMENTS_PREFIX, default 'documents/') and <SECRETS_PREFIX>",
+    "(SECRETS_MANAGER_PREFIX, default 'promise/') before use. Does not grant dynamodb:",
+    "UpdateItem/UpdateTable/DescribeTable -- those belong only to whoever runs",
+    "infra/deploy_gsi.py, see iam-migration-policy.json, never the app's own running role."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DynamoDbTableAndIndexAccess",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:<REGION>:<ACCOUNT_ID>:table/<TABLE_NAME>",
+        "arn:aws:dynamodb:<REGION>:<ACCOUNT_ID>:table/<TABLE_NAME>/index/UserOwnedIndex"
+      ]
+    },
+    {
+      "Sid": "S3DocumentArtifactAccess",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::<BUCKET>/<DOCUMENTS_PREFIX>*"
+    },
+    {
+      "Sid": "SecretsManagerIntegrationTokenAccess",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DeleteSecret"
+      ],
+      "Resource": "arn:aws:secretsmanager:<REGION>:<ACCOUNT_ID>:secret:<SECRETS_PREFIX>*"
+    },
+    {
+      "Sid": "BedrockModelInvocation",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": "arn:aws:bedrock:<REGION>::foundation-model/*"
+    }
+  ]
+}

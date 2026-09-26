@@ -1,0 +1,26 @@
+{
+  "_comment": [
+    "Extra, deploy-time-only permissions for whoever runs `uv run python infra/deploy_gsi.py`",
+    "(a human operator's own role, or a one-off CI/migration job) -- never attach this to the",
+    "running services/api or services/mcp task role itself; see infra/README.md step 1a and",
+    "iam-app-runtime-policy.json for the app's own, narrower runtime permissions. Replace",
+    "<REGION>, <ACCOUNT_ID>, <TABLE_NAME> (DYNAMODB_TABLE, default PROMISE) before use."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DynamoDbGsiMigration",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:DescribeTable",
+        "dynamodb:UpdateTable",
+        "dynamodb:UpdateItem",
+        "dynamodb:Scan"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:<REGION>:<ACCOUNT_ID>:table/<TABLE_NAME>",
+        "arn:aws:dynamodb:<REGION>:<ACCOUNT_ID>:table/<TABLE_NAME>/index/UserOwnedIndex"
+      ]
+    }
+  ]
+}
