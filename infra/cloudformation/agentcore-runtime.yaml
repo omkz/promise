@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  services/mcp deployed to Amazon Bedrock AgentCore Runtime (AWS::BedrockAgentCore::Runtime
+  -- a native CloudFormation resource, no separate CLI/SDK deploy step needed). Mirrors
+  api-service.yaml's environment configuration exactly (same DynamoDB/S3/Secrets Manager,
+  same AUTH_MODE=local default) since both services must observe the same workspace state
+  -- see services/mcp/AGENTCORE.md for the container contract this depends on
+  (0.0.0.0:8000/mcp, stateless streamable-HTTP, baked into the Dockerfile already).
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Must match the EnvironmentName used for the storage and iam stacks.
+    AllowedPattern: "[a-zA-Z0-9-]+"
+
+  McpImageIdentifier:
+    Type: String
+    Description: >
+      Full ECR image URI including tag, e.g. the McpRepositoryUri output from ecr.yaml plus
+      a unique tag -- must already be pushed (as linux/arm64 -- AgentCore Runtime requires
+      it) before this stack is created or updated to reference it.
+
+  AgentRuntimeName:
+    Type: String
+    Default: promise_mcp
+    Description: Must match AgentRuntimeName on the iam stack (scopes its AgentCore
+      platform permissions to this exact runtime).
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9_]{0,47}"
+
+  DocumentsPrefix:
+    Type: String
+    Default: documents/
+  SecretsManagerPrefix:
+    Type: String
+    Default: promise/
+
+  BedrockEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+
+  AuthMode:
+    Type: String
+    Default: local
+    AllowedValues: [local, oidc]
+    Description: "local (default): same seeded dev identity as services/api -- no Cognito
+      required for this MVP. oidc: requires the Cognito* parameters below."
+
+  DevUserId:
+    Type: String
+    Default: usr_dev_default
+  DevWorkspaceId:
+    Type: String
+    Default: ws_dev_default
+
+  CognitoIssuer:
+    Type: String
+    Default: ""
+  CognitoClientId:
+    Type: String
+    Default: ""
+
+  CorsOrigins:
+    Type: String
+    Default: "*"
+
+  PromiseTimezone:
+    Type: String
+    Default: Asia/Jakarta
+
+  AwsMaxRetryAttempts:
+    Type: Number
+    Default: 5
+
+Resources:
+  McpRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    Properties:
+      AgentRuntimeName: !Ref AgentRuntimeName
+      Description: !Sub "PROMISE MCP server (Streamable HTTP) -- ${EnvironmentName}"
+      AgentRuntimeArtifact:
+        ContainerConfiguration:
+          ContainerUri: !Ref McpImageIdentifier
+      RoleArn:
+        Fn::ImportValue: !Sub "Promise-${EnvironmentName}-RuntimeRoleArn"
+      NetworkConfiguration:
+        NetworkMode: PUBLIC
+      ProtocolConfiguration: MCP
+      EnvironmentVariables:
+        STORAGE_BACKEND: dynamodb
+        DYNAMODB_TABLE:
+          Fn::ImportValue: !Sub "Promise-${EnvironmentName}-TableName"
+        AWS_REGION: !Ref AWS::Region
+        BLOB_STORE_BACKEND: s3
+        S3_BUCKET:
+          Fn::ImportValue: !Sub "Promise-${EnvironmentName}-BucketName"
+        S3_DOCUMENTS_PREFIX: !Ref DocumentsPrefix
+        SECRET_STORE_BACKEND: aws
+        SECRETS_MANAGER_PREFIX: !Ref SecretsManagerPrefix
+        AWS_MAX_RETRY_ATTEMPTS: !Ref AwsMaxRetryAttempts
+        BEDROCK_ENABLED: !Ref BedrockEnabled
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        AUTH_MODE: !Ref AuthMode
+        DEV_USER_ID: !Ref DevUserId
+        DEV_WORKSPACE_ID: !Ref DevWorkspaceId
+        COGNITO_ISSUER: !Ref CognitoIssuer
+        COGNITO_CLIENT_ID: !Ref CognitoClientId
+        CORS_ORIGINS: !Ref CorsOrigins
+        PROMISE_TIMEZONE: !Ref PromiseTimezone
+      Tags:
+        Environment: !Ref EnvironmentName
+        Application: promise
+
+Outputs:
+  AgentRuntimeArn:
+    Description: >
+      Pass to InvokeAgentRuntime / https://bedrock-agentcore.<region>.amazonaws.com/runtimes/<encoded-arn>/invocations
+      -- never call the container directly.
+    Value: !Ref McpRuntime
+  AgentRuntimeId:
+    Value: !GetAtt McpRuntime.AgentRuntimeId
