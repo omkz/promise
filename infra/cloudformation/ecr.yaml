@@ -1,0 +1,104 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  ECR repositories for the three PROMISE container images (services/api,
+  services/mcp, web) -- one stack, three repos, so image build/push scripting only has
+  one set of URIs to look up. Scan-on-push and an untagged-image lifecycle policy are the
+  only opinions this template has; nothing else is prescribed. Safe to re-apply.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Logical environment name -- becomes part of each repository name, so
+      multiple environments in the same account/region never collide.
+    AllowedPattern: "[a-zA-Z0-9-]+"
+
+  UntaggedImageExpiryDays:
+    Type: Number
+    Default: 14
+    Description: Untagged images (superseded by a later push of the same tag) are expired
+      after this many days -- tagged images are never touched by this policy.
+
+Resources:
+  ApiRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "promise-${EnvironmentName}/api"
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EmptyOnDelete: true
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Expire untagged images after ${UntaggedImageExpiryDays} days",
+              "selection": {"tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": ${UntaggedImageExpiryDays}},
+              "action": {"type": "expire"}
+            }]
+          }
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: promise
+
+  McpRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "promise-${EnvironmentName}/mcp"
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EmptyOnDelete: true
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Expire untagged images after ${UntaggedImageExpiryDays} days",
+              "selection": {"tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": ${UntaggedImageExpiryDays}},
+              "action": {"type": "expire"}
+            }]
+          }
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: promise
+
+  WebRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "promise-${EnvironmentName}/web"
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EmptyOnDelete: true
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Expire untagged images after ${UntaggedImageExpiryDays} days",
+              "selection": {"tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": ${UntaggedImageExpiryDays}},
+              "action": {"type": "expire"}
+            }]
+          }
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: promise
+
+Outputs:
+  ApiRepositoryUri:
+    Value: !GetAtt ApiRepository.RepositoryUri
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-ApiRepositoryUri"
+  McpRepositoryUri:
+    Value: !GetAtt McpRepository.RepositoryUri
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-McpRepositoryUri"
+  WebRepositoryUri:
+    Value: !GetAtt WebRepository.RepositoryUri
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-WebRepositoryUri"
