@@ -69,7 +69,10 @@
    point at the same DynamoDB table so REST and MCP observe the same workspace state.
    For deploying `services/mcp` specifically to Amazon Bedrock AgentCore Runtime (container
    contract, ARM64 build, IAM, the exact `create-agent-runtime` command), see
-   `services/mcp/AGENTCORE.md`.
+   `services/mcp/AGENTCORE.md`. For the full CloudFormation-based deployment of every
+   piece (storage, ECR, IAM, api/web App Runner services, the AgentCore runtime) in the
+   exact order they depend on each other, see `infra/DEPLOYMENT.md` and the templates in
+   `infra/cloudformation/`.
 5. Put the web UI (`web/`) on Amplify, ECS, or another HTTPS host, pointed at the REST API's
    public URL via `NEXT_PUBLIC_API_URL`.
 6. Add Cognito/account-linking before connecting real user data — today, workspace/user
