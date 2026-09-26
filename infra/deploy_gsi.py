@@ -57,8 +57,9 @@ def _wait_for_index_active(client, table_name: str, *, poll_seconds: float = 5, 
 
 def deploy(table_name: str, region: str, *, backfill: bool = True) -> None:
     import boto3
+    from promise_shared.aws_config import boto_config
 
-    client = boto3.client("dynamodb", region_name=region)
+    client = boto3.client("dynamodb", region_name=region, config=boto_config())
 
     if _index_status(client, table_name) is None:
         client.update_table(**add_gsi_update(table_name))
