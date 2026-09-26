@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  services/api (FastAPI REST) as an AWS App Runner service -- HTTPS, autoscaling, no
+  VPC/ALB/ECS cluster to manage, matching "prefer the simplest maintainable" over
+  ECS/Fargate for a service with no special networking needs. Depends on the storage and
+  iam stacks (same EnvironmentName) for the table/bucket/role it needs. AUTH_MODE defaults
+  to "local" with the seeded dev workspace/user -- this deployment does not require
+  Cognito; switch AuthMode to "oidc" and set the Cognito parameters later if/when that's
+  actually needed.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Must match the EnvironmentName used for the storage and iam stacks.
+    AllowedPattern: "[a-zA-Z0-9-]+"
+
+  ApiImageIdentifier:
+    Type: String
+    Description: >
+      Full ECR image URI including tag, e.g. the ApiRepositoryUri output from ecr.yaml
+      plus ":latest" or a specific tag -- must already be pushed before this stack is
+      created or updated to reference it.
+
+  DocumentsPrefix:
+    Type: String
+    Default: documents/
+    Description: Must match DocumentsPrefix on the iam stack.
+
+  SecretsManagerPrefix:
+    Type: String
+    Default: promise/
+    Description: Must match SecretsManagerPrefix on the iam stack.
+
+  BedrockEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: "false (default): deterministic mock document revision/extraction, no
+      Bedrock model calls at all -- matches infra/README.md point 3's recommendation to
+      keep this false until a real model is actually wanted."
+
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+
+  AuthMode:
+    Type: String
+    Default: local
+    AllowedValues: [local, oidc]
+    Description: "local (default): deterministic seeded dev identity, no Cognito needed --
+      preserves the same fallback local development already uses. oidc: requires the
+      Cognito* parameters below to be set."
+
+  DevUserId:
+    Type: String
+    Default: usr_dev_default
+  DevWorkspaceId:
+    Type: String
+    Default: ws_dev_default
+
+  CognitoIssuer:
+    Type: String
+    Default: ""
+    Description: Only read when AuthMode=oidc.
+  CognitoClientId:
+    Type: String
+    Default: ""
+    Description: Only read when AuthMode=oidc.
+
+  CorsOrigins:
+    Type: String
+    Default: "*"
+    Description: Comma-separated allowed origins. Tighten this to the actual web service
+      URL once known (see the deployment guide's two-phase note) -- this default is
+      permissive only so the API stack can be created before the web stack exists.
+
+  PromiseTimezone:
+    Type: String
+    Default: Asia/Jakarta
+
+  AwsMaxRetryAttempts:
+    Type: Number
+    Default: 5
+
+  Cpu:
+    Type: String
+    Default: "512"
+    AllowedValues: ["256", "512", "1024", "2048", "4096"]
+    Description: App Runner vCPU units (256=0.25vCPU, 512=0.5vCPU, ...).
+  Memory:
+    Type: String
+    Default: "1024"
+    AllowedValues: ["512", "1024", "2048", "3072", "4096", "6144", "8192", "10240", "12288"]
+    Description: App Runner memory in MB.
+
+Resources:
+  ApiService:
+    Type: AWS::AppRunner::Service
+    Properties:
+      ServiceName: !Sub "promise-api-${EnvironmentName}"
+      SourceConfiguration:
+        AutoDeploymentsEnabled: false
+        AuthenticationConfiguration:
+          AccessRoleArn:
+            Fn::ImportValue: !Sub "Promise-${EnvironmentName}-AppRunnerEcrAccessRoleArn"
+        ImageRepository:
+          ImageIdentifier: !Ref ApiImageIdentifier
+          ImageRepositoryType: ECR
+          ImageConfiguration:
+            Port: "8000"
+            RuntimeEnvironmentVariables:
+              - Name: STORAGE_BACKEND
+                Value: dynamodb
+              - Name: DYNAMODB_TABLE
+                Value:
+                  Fn::ImportValue: !Sub "Promise-${EnvironmentName}-TableName"
+              - Name: AWS_REGION
+                Value: !Ref AWS::Region
+              - Name: BLOB_STORE_BACKEND
+                Value: s3
+              - Name: S3_BUCKET
+                Value:
+                  Fn::ImportValue: !Sub "Promise-${EnvironmentName}-BucketName"
+              - Name: S3_DOCUMENTS_PREFIX
+                Value: !Ref DocumentsPrefix
+              - Name: SECRET_STORE_BACKEND
+                Value: aws
+              - Name: SECRETS_MANAGER_PREFIX
+                Value: !Ref SecretsManagerPrefix
+              - Name: AWS_MAX_RETRY_ATTEMPTS
+                Value: !Ref AwsMaxRetryAttempts
+              - Name: BEDROCK_ENABLED
+                Value: !Ref BedrockEnabled
+              - Name: BEDROCK_MODEL_ID
+                Value: !Ref BedrockModelId
+              - Name: AUTH_MODE
+                Value: !Ref AuthMode
+              - Name: DEV_USER_ID
+                Value: !Ref DevUserId
+              - Name: DEV_WORKSPACE_ID
+                Value: !Ref DevWorkspaceId
+              - Name: COGNITO_ISSUER
+                Value: !Ref CognitoIssuer
+              - Name: COGNITO_CLIENT_ID
+                Value: !Ref CognitoClientId
+              - Name: CORS_ORIGINS
+                Value: !Ref CorsOrigins
+              - Name: PROMISE_TIMEZONE
+                Value: !Ref PromiseTimezone
+      InstanceConfiguration:
+        Cpu: !Ref Cpu
+        Memory: !Ref Memory
+        InstanceRoleArn:
+          Fn::ImportValue: !Sub "Promise-${EnvironmentName}-RuntimeRoleArn"
+      HealthCheckConfiguration:
+        Protocol: HTTP
+        Path: /health
+        Interval: 10
+        Timeout: 5
+        HealthyThreshold: 1
+        UnhealthyThreshold: 5
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: promise
+
+Outputs:
+  ServiceUrl:
+    Description: HTTPS URL App Runner provisions automatically for this service.
+    Value: !Sub "https://${ApiService.ServiceUrl}"
+    Export:
+      Name: !Sub "Promise-${EnvironmentName}-ApiServiceUrl"
+  ServiceArn:
+    Value: !GetAtt ApiService.ServiceArn
