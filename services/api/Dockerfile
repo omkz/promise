@@ -15,6 +15,7 @@ COPY packages/shared/pyproject.toml packages/shared/pyproject.toml
 COPY packages/domain/pyproject.toml packages/domain/pyproject.toml
 COPY packages/integrations/pyproject.toml packages/integrations/pyproject.toml
 COPY packages/agent/pyproject.toml packages/agent/pyproject.toml
+COPY packages/auth/pyproject.toml packages/auth/pyproject.toml
 COPY packages/app/pyproject.toml packages/app/pyproject.toml
 COPY services/api/pyproject.toml services/api/pyproject.toml
 COPY services/mcp/pyproject.toml services/mcp/pyproject.toml
@@ -27,6 +28,7 @@ COPY packages/shared packages/shared
 COPY packages/domain packages/domain
 COPY packages/integrations packages/integrations
 COPY packages/agent packages/agent
+COPY packages/auth packages/auth
 COPY packages/app packages/app
 COPY services/api services/api
 COPY services/mcp services/mcp
