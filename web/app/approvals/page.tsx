@@ -40,16 +40,28 @@ export default function ApprovalsPage() {
       await decideApproval(a.id, "approved");
       await executeAction(a.action_id);
       setNotice("Approved and executed.");
-      await refresh();
-    } catch (e) { setNotice(e instanceof Error ? e.message : "Failed"); }
-    finally { setBusyId(null); }
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Failed");
+    } finally {
+      // Refresh on failure too (e.g. a 409 because someone/something else already
+      // decided this approval) -- otherwise this row keeps showing PENDING with
+      // active buttons even though the error just said it's already been decided.
+      await refresh().catch(() => {});
+      setBusyId(null);
+    }
   }
 
   async function reject(a: Approval) {
     setBusyId(a.id); setNotice("");
-    try { await decideApproval(a.id, "rejected"); setNotice("Rejected."); await refresh(); }
-    catch (e) { setNotice(e instanceof Error ? e.message : "Failed"); }
-    finally { setBusyId(null); }
+    try {
+      await decideApproval(a.id, "rejected");
+      setNotice("Rejected.");
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Failed");
+    } finally {
+      await refresh().catch(() => {});
+      setBusyId(null);
+    }
   }
 
   return (
