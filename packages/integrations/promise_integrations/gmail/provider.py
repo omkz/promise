@@ -10,6 +10,7 @@ from promise_shared.blobs import DocumentBlobStore
 from promise_shared.clock import iso_now
 from promise_shared.errors import (
     AttachmentTooLarge,
+    ConflictError,
     DocumentArtifactMissing,
     IntegrationInvalidRequest,
     IntegrationPermissionDenied,
@@ -132,8 +133,23 @@ class GmailIntegrationProvider:
         anyway) -- a `Draft` already `SENT` is treated as a replay and Gmail is
         never called again for it. This is the second guard against the
         "timed out after Gmail may have already accepted it" scenario; the
-        first is `execute_action`'s own `Action.status == EXECUTED` check
-        before this method is ever reached at all.
+        first is `execute_action`'s own atomic `Action` `APPROVED` ->
+        `EXECUTING` claim before this method is ever reached at all.
+
+        Concurrency: never a plain "read status, then send" -- a second guard
+        one layer below the Action-level claim, in case anything else ever
+        calls this method directly. `DRAFT -> SENDING` is itself an atomic
+        compare-and-set (`Repository.update`'s own docstring) before any MIME
+        message is built or Gmail is called: a second concurrent
+        `send_message` for the *same* `draft_id` can never both win that claim,
+        so it can never both reach Gmail's API either. If local preparation
+        (loading the attachment, checking its size) fails after the claim but
+        before Gmail is ever contacted, the claim is released back to `DRAFT`
+        -- nothing was actually sent, so a retry must be able to really retry,
+        not be told "already sent". If Gmail *is* contacted and the response
+        is never received (a timeout), the claim is deliberately left at
+        `SENDING` rather than guessed at either way -- never blindly resend
+        after an uncertain provider result.
 
         Attachment: when the draft carries `attachment_document_id`, the
         referenced `Document` is loaded through `self._documents` -- scoped by
@@ -167,32 +183,55 @@ class GmailIntegrationProvider:
         if draft.status == DraftStatus.SENT:
             return {"idempotent_replay": True, "draft": draft.model_dump(mode="json")}
 
-        attachment = None
-        if draft.attachment_document_id:
-            document = self._documents.require(workspace_id, draft.attachment_document_id)
-            if not document.storage_key:
-                raise DocumentArtifactMissing(document.id)
-            blob = self._blob_store.get(document.storage_key)
-            if blob is None:
-                raise DocumentArtifactMissing(document.id)
-            conservative_raw_limit = int(self._max_attachment_bytes / self._attachment_encoding_margin)
-            if blob.size_bytes > conservative_raw_limit:
-                raise AttachmentTooLarge(document.id, size_bytes=blob.size_bytes, max_bytes=self._max_attachment_bytes)
-            attachment = {"filename": blob.filename, "content_type": blob.content_type, "content_bytes": blob.data}
+        try:
+            self._drafts.update(
+                workspace_id, draft_id, lambda d: setattr(d, "status", DraftStatus.SENDING),
+                expected_status=DraftStatus.DRAFT,
+            )
+        except ConflictError:
+            current = self._drafts.require(workspace_id, draft_id)
+            if current.status == DraftStatus.SENT:
+                return {"idempotent_replay": True, "draft": current.model_dump(mode="json")}
+            # Someone else's send is already in flight (still SENDING) -- this call
+            # loses the race outright, it never gets to attempt a send of its own.
+            raise IntegrationInvalidRequest(PROVIDER_NAME, f"draft '{draft_id}' send is already in progress") from None
 
-        raw = build_raw_send_message(to=draft.recipient, subject=draft.subject, body=draft.body, attachment=attachment)
+        try:
+            attachment = None
+            if draft.attachment_document_id:
+                document = self._documents.require(workspace_id, draft.attachment_document_id)
+                if not document.storage_key:
+                    raise DocumentArtifactMissing(document.id)
+                blob = self._blob_store.get(document.storage_key)
+                if blob is None:
+                    raise DocumentArtifactMissing(document.id)
+                conservative_raw_limit = int(self._max_attachment_bytes / self._attachment_encoding_margin)
+                if blob.size_bytes > conservative_raw_limit:
+                    raise AttachmentTooLarge(document.id, size_bytes=blob.size_bytes, max_bytes=self._max_attachment_bytes)
+                attachment = {"filename": blob.filename, "content_type": blob.content_type, "content_bytes": blob.data}
 
-        # Authoritative: base64url is pure ASCII, so len(raw) in characters is exactly
-        # its byte count -- the literal size of what's about to be sent, not an estimate.
-        if len(raw) > self._max_attachment_bytes:
-            document_id = draft.attachment_document_id or draft.id
-            raise AttachmentTooLarge(document_id, size_bytes=len(raw), max_bytes=self._max_attachment_bytes)
+            raw = build_raw_send_message(to=draft.recipient, subject=draft.subject, body=draft.body, attachment=attachment)
+
+            # Authoritative: base64url is pure ASCII, so len(raw) in characters is exactly
+            # its byte count -- the literal size of what's about to be sent, not an estimate.
+            if len(raw) > self._max_attachment_bytes:
+                document_id = draft.attachment_document_id or draft.id
+                raise AttachmentTooLarge(document_id, size_bytes=len(raw), max_bytes=self._max_attachment_bytes)
+        except Exception:
+            # Nothing was ever sent to Gmail -- release the claim so a real retry can
+            # actually attempt to send, instead of being stuck at SENDING forever (which
+            # would make every future call incorrectly look like a successful replay).
+            self._drafts.update(
+                workspace_id, draft_id, lambda d: setattr(d, "status", DraftStatus.DRAFT), expected_status=DraftStatus.SENDING
+            )
+            raise
 
         resp = self._request("POST", "/users/me/messages/send", json={"raw": raw})
         sent = resp.json()
 
         updated = self._drafts.update(
-            workspace_id, draft_id, lambda d: (setattr(d, "status", DraftStatus.SENT), setattr(d, "sent_at", iso_now()))
+            workspace_id, draft_id, lambda d: (setattr(d, "status", DraftStatus.SENT), setattr(d, "sent_at", iso_now())),
+            expected_status=DraftStatus.SENDING,
         )
         return {
             "idempotent_replay": False,

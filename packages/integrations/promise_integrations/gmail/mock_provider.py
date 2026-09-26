@@ -6,7 +6,7 @@ from promise_domain.enums import DraftStatus
 from promise_domain.models import Draft
 from promise_domain.repository import Repository
 from promise_shared.clock import iso_now
-from promise_shared.errors import IntegrationInvalidRequest, IntegrationNotConnected
+from promise_shared.errors import ConflictError, IntegrationInvalidRequest, IntegrationNotConnected
 
 
 class MockGmailIntegrationProvider:
@@ -66,8 +66,23 @@ class MockGmailIntegrationProvider:
         draft = self._drafts.require(workspace_id, draft_id)
         if draft.status == DraftStatus.SENT:
             return {"idempotent_replay": True, "draft": draft.model_dump(mode="json")}
+
+        # Same atomic DRAFT -> SENDING claim as GmailIntegrationProvider.send_message,
+        # not a plain read-then-send -- see that method's docstring.
+        try:
+            self._drafts.update(
+                workspace_id, draft_id, lambda d: setattr(d, "status", DraftStatus.SENDING),
+                expected_status=DraftStatus.DRAFT,
+            )
+        except ConflictError:
+            current = self._drafts.require(workspace_id, draft_id)
+            if current.status == DraftStatus.SENT:
+                return {"idempotent_replay": True, "draft": current.model_dump(mode="json")}
+            raise IntegrationInvalidRequest(self.provider_name, f"draft '{draft_id}' send is already in progress") from None
+
         updated = self._drafts.update(
-            workspace_id, draft_id, lambda d: (setattr(d, "status", DraftStatus.SENT), setattr(d, "sent_at", iso_now()))
+            workspace_id, draft_id, lambda d: (setattr(d, "status", DraftStatus.SENT), setattr(d, "sent_at", iso_now())),
+            expected_status=DraftStatus.SENDING,
         )
         self.sent_draft_ids.append(draft_id)
         return {

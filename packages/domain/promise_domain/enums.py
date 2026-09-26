@@ -62,6 +62,11 @@ class ApprovalStatus(str, Enum):
 class DraftStatus(str, Enum):
     DRAFT = "draft"
     APPROVED = "approved"
+    # Claimed by exactly one send_message call (atomic DRAFT -> SENDING compare-and-set,
+    # see GmailIntegrationProvider.send_message) between "about to call the provider's
+    # send API" and "provider confirmed it sent" -- mirrors ActionStatus.EXECUTING one
+    # layer down, so a second concurrent send_message for the same draft never both send.
+    SENDING = "sending"
     SENT = "sent"
 
 
