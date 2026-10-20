@@ -113,22 +113,47 @@ export default function ApprovalsPage() {
 
     // Step 2: Approval was successfully recorded. Now execute the side-effect action.
     try {
-      await executeAction(a.action_id);
-      setPageNotice({
-        kind: "success",
-        message: "Approval recorded and action executed successfully.",
-      });
-      setCardState(a.id, { type: "success", message: "Approved and executed." });
+      const result = await executeAction(a.action_id);
+      const actionStatus = result?.action?.status;
+
+      if (actionStatus === "executed") {
+        setPageNotice({
+          kind: "success",
+          message: "Approval recorded and action executed successfully.",
+        });
+        setCardState(a.id, { type: "success", message: "Approved and executed." });
+      } else if (actionStatus === "failed") {
+        const errorDetail = result?.action?.error ? `: ${result.action.error}` : "";
+        setPageNotice({
+          kind: "error",
+          message: `Approval recorded, but PROMISE recorded execution as failed${errorDetail}. Please verify with the external provider before retrying.`,
+        });
+        setCardState(a.id, {
+          type: "error",
+          message: `Approval recorded, but execution recorded as failed${errorDetail}`,
+        });
+      } else {
+        const statusDetail = actionStatus ? ` (status: ${actionStatus})` : "";
+        setPageNotice({
+          kind: "error",
+          message: `Approval recorded, but the execution outcome could not be confirmed${statusDetail}. Please check Activity and the external provider before retrying.`,
+        });
+        setCardState(a.id, {
+          type: "error",
+          message: `Approval recorded, but execution outcome could not be confirmed${statusDetail}`,
+        });
+      }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Execution failed";
-      // Clearly report that approval was recorded, but execution failed. Do NOT imply execution succeeded.
+      const msg = e instanceof Error ? e.message : "Execution request failed";
+      // Distinguish HTTP/network request errors from backend-reported execution failures.
+      // External side effects might have been accepted before the timeout or network drop.
       setPageNotice({
         kind: "error",
-        message: `Approval recorded, but action execution failed: ${msg}. The action has not completed.`,
+        message: `Approval recorded, but action execution request failed: ${msg}. The execution outcome could not be confirmed. Please check Activity and the external provider before retrying.`,
       });
       setCardState(a.id, {
         type: "error",
-        message: `Approval recorded, but execution failed: ${msg}`,
+        message: `Approval recorded, but execution outcome could not be confirmed (${msg})`,
       });
     } finally {
       // Refresh after decision attempt — the pending approval row disappears,

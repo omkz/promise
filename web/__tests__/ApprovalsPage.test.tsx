@@ -151,7 +151,7 @@ describe("ApprovalsPage – approve flow", () => {
     await act(async () => { resolveDecide(); });
   });
 
-  it("shows persistent page notice after approve+execute and card disappears", async () => {
+  it("shows persistent page notice after approve+execute when action status is 'executed' and card disappears", async () => {
     // Real state transition: first fetch returns [approval], subsequent fetch returns []
     mockListPending.mockResolvedValueOnce([approval]).mockResolvedValue([]);
     mockListActions.mockResolvedValue([action]);
@@ -171,16 +171,21 @@ describe("ApprovalsPage – approve flow", () => {
     });
 
     // Persistent page-level notice confirms both approval and execution
-    expect(screen.getByTestId("page-notice")).toHaveTextContent("Approval recorded and action executed successfully.");
+    const notice = screen.getByTestId("page-notice");
+    expect(notice).toHaveTextContent("Approval recorded and action executed successfully.");
+    expect(notice).toHaveClass("notice--success");
   });
 
-  it("clearly reports when approval succeeds but executeAction fails", async () => {
-    // decideApproval succeeds, but executeAction fails (e.g. Gmail rate limit or provider error)
+  it("shows failure notice and no success notice when executeAction resolves with action.status === 'failed'", async () => {
+    // Backend returns 200 with result.action.status === "failed" and error message
     mockListPending.mockResolvedValueOnce([approval]).mockResolvedValue([]);
     mockListActions.mockResolvedValue([action]);
     mockGetCommitments.mockResolvedValue([commitment]);
     mockDecide.mockResolvedValue({ ...approval, status: "approved" });
-    mockExecute.mockRejectedValue(new Error("Gmail provider rate limited"));
+    mockExecute.mockResolvedValue({
+      action: { ...action, status: "failed", error: "Gmail provider rate limited" },
+      commitment,
+    });
 
     await act(async () => { render(<ApprovalsPage />); });
     await act(async () => { fireEvent.click(screen.getByTestId("btn-approve")); });
@@ -190,11 +195,82 @@ describe("ApprovalsPage – approve flow", () => {
       expect(screen.queryByTestId("approval-card")).not.toBeInTheDocument();
     });
 
-    // Page notice explicitly distinguishes that approval was recorded from execution failure
+    // Page notice explicitly shows that PROMISE recorded execution as failed with error detail and advises verification
     const notice = screen.getByTestId("page-notice");
-    expect(notice).toHaveTextContent("Approval recorded, but action execution failed: Gmail provider rate limited");
-    expect(notice).toHaveTextContent("The action has not completed.");
-    expect(notice).not.toHaveTextContent("action executed successfully");
+    expect(notice).toHaveTextContent("Approval recorded, but PROMISE recorded execution as failed: Gmail provider rate limited. Please verify with the external provider before retrying.");
+    expect(notice).not.toHaveTextContent("The action has not completed");
+    expect(notice).toHaveClass("notice--error");
+    expect(notice).not.toHaveClass("notice--success");
+    expect(screen.queryByText(/action executed successfully/i)).not.toBeInTheDocument();
+  });
+
+  it("shows failure notice when executeAction resolves with failed action without error detail", async () => {
+    mockListPending.mockResolvedValueOnce([approval]).mockResolvedValue([]);
+    mockListActions.mockResolvedValue([action]);
+    mockGetCommitments.mockResolvedValue([commitment]);
+    mockDecide.mockResolvedValue({ ...approval, status: "approved" });
+    mockExecute.mockResolvedValue({
+      action: { ...action, status: "failed", error: null },
+      commitment,
+    });
+
+    await act(async () => { render(<ApprovalsPage />); });
+    await act(async () => { fireEvent.click(screen.getByTestId("btn-approve")); });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("approval-card")).not.toBeInTheDocument();
+    });
+
+    const notice = screen.getByTestId("page-notice");
+    expect(notice).toHaveTextContent("Approval recorded, but PROMISE recorded execution as failed. Please verify with the external provider before retrying.");
+    expect(notice).not.toHaveTextContent("The action has not completed");
+    expect(screen.queryByText(/action executed successfully/i)).not.toBeInTheDocument();
+  });
+
+  it("shows unconfirmed outcome notice when executeAction resolves with an unexpected status", async () => {
+    mockListPending.mockResolvedValueOnce([approval]).mockResolvedValue([]);
+    mockListActions.mockResolvedValue([action]);
+    mockGetCommitments.mockResolvedValue([commitment]);
+    mockDecide.mockResolvedValue({ ...approval, status: "approved" });
+    mockExecute.mockResolvedValue({
+      action: { ...action, status: "queued" },
+      commitment,
+    });
+
+    await act(async () => { render(<ApprovalsPage />); });
+    await act(async () => { fireEvent.click(screen.getByTestId("btn-approve")); });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("approval-card")).not.toBeInTheDocument();
+    });
+
+    const notice = screen.getByTestId("page-notice");
+    expect(notice).toHaveTextContent("Approval recorded, but the execution outcome could not be confirmed (status: queued). Please check Activity and the external provider before retrying.");
+    expect(notice).not.toHaveTextContent("The action has not completed");
+    expect(screen.queryByText(/action executed successfully/i)).not.toBeInTheDocument();
+  });
+
+  it("clearly reports HTTP or network error when executeAction request rejects", async () => {
+    // executeAction rejects (e.g. network failure / 500 error)
+    mockListPending.mockResolvedValueOnce([approval]).mockResolvedValue([]);
+    mockListActions.mockResolvedValue([action]);
+    mockGetCommitments.mockResolvedValue([commitment]);
+    mockDecide.mockResolvedValue({ ...approval, status: "approved" });
+    mockExecute.mockRejectedValue(new Error("Network connection lost"));
+
+    await act(async () => { render(<ApprovalsPage />); });
+    await act(async () => { fireEvent.click(screen.getByTestId("btn-approve")); });
+
+    // Pending card disappears because the approval was committed in DB
+    await waitFor(() => {
+      expect(screen.queryByTestId("approval-card")).not.toBeInTheDocument();
+    });
+
+    // Page notice explicitly distinguishes HTTP/network request failure and advises verification
+    const notice = screen.getByTestId("page-notice");
+    expect(notice).toHaveTextContent("Approval recorded, but action execution request failed: Network connection lost. The execution outcome could not be confirmed. Please check Activity and the external provider before retrying.");
+    expect(notice).not.toHaveTextContent("The action has not completed");
+    expect(screen.queryByText(/action executed successfully/i)).not.toBeInTheDocument();
   });
 
   it("calls decideApproval then executeAction in order", async () => {
