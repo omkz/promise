@@ -304,4 +304,50 @@ describe("ActivityPage", () => {
       expect(mockListAuditEvents).toHaveBeenCalledTimes(2);
     });
   });
+
+  it("displays action history sorted newest activity first", async () => {
+    const unsortedActions: Action[] = [
+      {
+        id: "act_oldest",
+        type: "publish",
+        status: "executed",
+        commitment_id: "com_1",
+        payload: {},
+        created_at: "2026-10-20T01:00:00Z",
+      },
+      {
+        id: "act_newest",
+        type: "send_message",
+        status: "executed",
+        commitment_id: "com_1",
+        payload: {},
+        created_at: "2026-10-20T01:00:00Z",
+        executed_at: "2026-10-20T05:00:00Z",
+      },
+      {
+        id: "act_middle",
+        type: "create_calendar_event",
+        status: "failed",
+        commitment_id: "com_1",
+        payload: {},
+        created_at: "2026-10-20T01:00:00Z",
+        updated_at: "2026-10-20T03:00:00Z",
+      },
+    ];
+
+    mockListAgentRuns.mockResolvedValue([]);
+    mockListActions.mockResolvedValue(unsortedActions);
+    mockListAuditEvents.mockResolvedValue([]);
+    mockGetCommitments.mockResolvedValue(sampleCommitments);
+
+    await act(async () => {
+      render(<ActivityPage />);
+    });
+
+    const actionCards = screen.getAllByTestId("action-history-card");
+    expect(actionCards).toHaveLength(3);
+    expect(actionCards[0]).toHaveAttribute("data-action-id", "act_newest");
+    expect(actionCards[1]).toHaveAttribute("data-action-id", "act_middle");
+    expect(actionCards[2]).toHaveAttribute("data-action-id", "act_oldest");
+  });
 });

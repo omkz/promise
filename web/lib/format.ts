@@ -29,3 +29,30 @@ export function formatDuration(startedAt: string, endedAt: string | null | undef
   if (diffMs < 1000) return `${diffMs}ms`;
   return `${(diffMs / 1000).toFixed(1)}s`;
 }
+
+export function getActionTimestamp(action: {
+  executed_at?: string | null;
+  updated_at?: string | null;
+  created_at?: string | null;
+}): number {
+  const ts = action.executed_at ?? action.updated_at ?? action.created_at;
+  if (!ts) return 0;
+  const time = new Date(ts).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+export function sortActionsNewestFirst<T extends {
+  id: string;
+  executed_at?: string | null;
+  updated_at?: string | null;
+  created_at?: string | null;
+}>(actions: T[]): T[] {
+  return [...actions].sort((a, b) => {
+    const timeA = getActionTimestamp(a);
+    const timeB = getActionTimestamp(b);
+    if (timeA !== timeB) {
+      return timeB - timeA;
+    }
+    return b.id.localeCompare(a.id);
+  });
+}

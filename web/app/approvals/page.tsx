@@ -14,9 +14,20 @@ import {
   type Commitment,
 } from "../../lib/api";
 
-// ---- top-level notice (load errors / backend down) ------------------------------------------
+// ---- top-level notice (persistent page feedback / load errors) ------------------------------
 
-type PageNotice = { kind: "error"; message: string } | { kind: "info"; message: string };
+type PageNotice = {
+  kind: "error" | "success" | "conflict" | "info";
+  message: string;
+};
+
+function isConflictError(e: unknown): boolean {
+  if (e instanceof Error) {
+    const msg = e.message.toLowerCase();
+    return msg.includes("409") || msg.includes("conflict") || msg.includes("already");
+  }
+  return false;
+}
 
 // ---- page -----------------------------------------------------------------------------------
 
@@ -61,12 +72,16 @@ export default function ApprovalsPage() {
         setCommitments(Object.fromEntries(allCommitments.map((c) => [c.id, c])));
       })
       .catch(() => {
-        if (!cancelled) setPageNotice({ kind: "error", message: "Could not reach the backend — start it on port 8000." });
+        if (!cancelled) {
+          setPageNotice({ kind: "error", message: "Could not reach the backend — start it on port 8000." });
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // ---- per-card state helpers --------------------------------------------------------
@@ -79,30 +94,68 @@ export default function ApprovalsPage() {
 
   async function approve(a: Approval) {
     setCardState(a.id, { type: "loading", decision: "approve" });
+    setPageNotice(null);
+
+    // Step 1: Record the approval decision.
     try {
       await decideApproval(a.id, "approved");
-      await executeAction(a.action_id);
-      setCardState(a.id, { type: "success", message: "Approved and executed." });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed";
-      const isConflict = msg.includes("409") || msg.toLowerCase().includes("conflict") || msg.toLowerCase().includes("already");
-      setCardState(a.id, isConflict ? { type: "conflict", message: "Already decided — refreshing…" } : { type: "error", message: msg });
+      const conflict = isConflictError(e);
+      const errorMsg = conflict
+        ? "Conflict: This approval has already been decided."
+        : `Approval failed: ${msg}`;
+      setCardState(a.id, conflict ? { type: "conflict", message: errorMsg } : { type: "error", message: errorMsg });
+      setPageNotice({ kind: conflict ? "conflict" : "error", message: errorMsg });
+      await loadData().catch(() => {});
+      return;
+    }
+
+    // Step 2: Approval was successfully recorded. Now execute the side-effect action.
+    try {
+      await executeAction(a.action_id);
+      setPageNotice({
+        kind: "success",
+        message: "Approval recorded and action executed successfully.",
+      });
+      setCardState(a.id, { type: "success", message: "Approved and executed." });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Execution failed";
+      // Clearly report that approval was recorded, but execution failed. Do NOT imply execution succeeded.
+      setPageNotice({
+        kind: "error",
+        message: `Approval recorded, but action execution failed: ${msg}. The action has not completed.`,
+      });
+      setCardState(a.id, {
+        type: "error",
+        message: `Approval recorded, but execution failed: ${msg}`,
+      });
     } finally {
-      // Refresh after every decision attempt — including failures and 409 conflicts —
-      // so this row disappears (or shows updated status) instead of remaining stale.
+      // Refresh after decision attempt — the pending approval row disappears,
+      // but pageNotice ensures the user has persistent feedback.
       await loadData().catch(() => {});
     }
   }
 
   async function reject(a: Approval) {
     setCardState(a.id, { type: "loading", decision: "reject" });
+    setPageNotice(null);
+
     try {
       await decideApproval(a.id, "rejected");
+      setPageNotice({
+        kind: "success",
+        message: "Decision recorded: Action rejected. No external action will be executed.",
+      });
       setCardState(a.id, { type: "success", message: "Rejected." });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed";
-      const isConflict = msg.includes("409") || msg.toLowerCase().includes("conflict") || msg.toLowerCase().includes("already");
-      setCardState(a.id, isConflict ? { type: "conflict", message: "Already decided — refreshing…" } : { type: "error", message: msg });
+      const conflict = isConflictError(e);
+      const errorMsg = conflict
+        ? "Conflict: This approval has already been decided."
+        : `Rejection failed: ${msg}`;
+      setCardState(a.id, conflict ? { type: "conflict", message: errorMsg } : { type: "error", message: errorMsg });
+      setPageNotice({ kind: conflict ? "conflict" : "error", message: errorMsg });
     } finally {
       await loadData().catch(() => {});
     }
@@ -126,7 +179,15 @@ export default function ApprovalsPage() {
 
       {pageNotice && (
         <div
-          className={`notice${pageNotice.kind === "error" ? " notice--error" : ""}`}
+          className={`notice${
+            pageNotice.kind === "error"
+              ? " notice--error"
+              : pageNotice.kind === "success"
+                ? " notice--success"
+                : pageNotice.kind === "conflict"
+                  ? " notice--warning"
+                  : ""
+          }`}
           role={pageNotice.kind === "error" ? "alert" : "status"}
           data-testid="page-notice"
         >

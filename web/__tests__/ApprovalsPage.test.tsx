@@ -9,10 +9,11 @@
  *  - empty state when no approvals are pending
  *  - backend-down: page-level error notice
  *  - approval card rendered with action + commitment context
- *  - approve flow: loading → success → data refresh (card disappears)
- *  - reject flow: loading → success → data refresh
- *  - conflict (409): per-card conflict notice + data refresh
- *  - error: per-card error notice, buttons re-enabled
+ *  - approve flow: loading → success → card disappears → persistent page notice
+ *  - approve succeeds but execution fails: card disappears → clear failure notice (does not imply executed)
+ *  - reject flow: loading → success → card disappears → persistent page notice
+ *  - conflict (409): conflict notice + data refresh
+ *  - error: error notice, buttons re-enabled
  *  - duplicate click prevention: second click while loading is a no-op
  */
 
@@ -83,9 +84,6 @@ function setupDefaultMocks() {
   mockExecute.mockResolvedValue({ action: { ...action, status: "executed" }, commitment });
 }
 
-// After a decision the approval is no longer pending — helper kept for reference
-// but not used in the test suite directly (each test sets up its own mock calls).
-
 // ---- tests ------------------------------------------------------------------
 
 beforeEach(() => {
@@ -139,7 +137,6 @@ describe("ApprovalsPage – card rendered", () => {
 describe("ApprovalsPage – approve flow", () => {
   it("shows 'Approving…' while in flight", async () => {
     setupDefaultMocks();
-    // Make decideApproval block so we can observe loading state
     let resolveDecide!: () => void;
     mockDecide.mockReturnValue(new Promise((res) => { resolveDecide = () => res({ ...approval, status: "approved" }); }));
 
@@ -154,18 +151,50 @@ describe("ApprovalsPage – approve flow", () => {
     await act(async () => { resolveDecide(); });
   });
 
-  it("shows success notice after approve+execute", async () => {
-    setupDefaultMocks();
-    // Keep the approval in pending even after the refresh so the card (and its
-    // success state) stays visible long enough to assert on it.
-    mockListPending.mockResolvedValue([approval]);
+  it("shows persistent page notice after approve+execute and card disappears", async () => {
+    // Real state transition: first fetch returns [approval], subsequent fetch returns []
+    mockListPending.mockResolvedValueOnce([approval]).mockResolvedValue([]);
+    mockListActions.mockResolvedValue([action]);
+    mockGetCommitments.mockResolvedValue([commitment]);
+    mockDecide.mockResolvedValue({ ...approval, status: "approved" });
+    mockExecute.mockResolvedValue({ action: { ...action, status: "executed" }, commitment });
+
+    await act(async () => { render(<ApprovalsPage />); });
+    expect(screen.getByTestId("approval-card")).toBeInTheDocument();
+
+    await act(async () => { fireEvent.click(screen.getByTestId("btn-approve")); });
+
+    // The approval is no longer pending, so the card disappears and empty state is shown
+    await waitFor(() => {
+      expect(screen.queryByTestId("approval-card")).not.toBeInTheDocument();
+      expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+    });
+
+    // Persistent page-level notice confirms both approval and execution
+    expect(screen.getByTestId("page-notice")).toHaveTextContent("Approval recorded and action executed successfully.");
+  });
+
+  it("clearly reports when approval succeeds but executeAction fails", async () => {
+    // decideApproval succeeds, but executeAction fails (e.g. Gmail rate limit or provider error)
+    mockListPending.mockResolvedValueOnce([approval]).mockResolvedValue([]);
+    mockListActions.mockResolvedValue([action]);
+    mockGetCommitments.mockResolvedValue([commitment]);
+    mockDecide.mockResolvedValue({ ...approval, status: "approved" });
+    mockExecute.mockRejectedValue(new Error("Gmail provider rate limited"));
 
     await act(async () => { render(<ApprovalsPage />); });
     await act(async () => { fireEvent.click(screen.getByTestId("btn-approve")); });
 
-    await waitFor(() =>
-      expect(screen.getByTestId("card-notice-success")).toHaveTextContent("Approved and executed.")
-    );
+    // Pending card disappears because the approval was committed in DB
+    await waitFor(() => {
+      expect(screen.queryByTestId("approval-card")).not.toBeInTheDocument();
+    });
+
+    // Page notice explicitly distinguishes that approval was recorded from execution failure
+    const notice = screen.getByTestId("page-notice");
+    expect(notice).toHaveTextContent("Approval recorded, but action execution failed: Gmail provider rate limited");
+    expect(notice).toHaveTextContent("The action has not completed.");
+    expect(notice).not.toHaveTextContent("action executed successfully");
   });
 
   it("calls decideApproval then executeAction in order", async () => {
@@ -201,16 +230,21 @@ describe("ApprovalsPage – reject flow", () => {
     await act(async () => { resolveDecide(); });
   });
 
-  it("shows success notice after reject", async () => {
-    setupDefaultMocks();
+  it("shows persistent page notice after reject and card disappears", async () => {
+    mockListPending.mockResolvedValueOnce([approval]).mockResolvedValue([]);
+    mockListActions.mockResolvedValue([action]);
+    mockGetCommitments.mockResolvedValue([commitment]);
     mockDecide.mockResolvedValue({ ...approval, status: "rejected" });
 
     await act(async () => { render(<ApprovalsPage />); });
     await act(async () => { fireEvent.click(screen.getByTestId("btn-reject")); });
 
-    await waitFor(() =>
-      expect(screen.getByTestId("card-notice-success")).toHaveTextContent("Rejected.")
-    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("approval-card")).not.toBeInTheDocument();
+      expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId("page-notice")).toHaveTextContent("Action rejected. No external action will be executed.");
   });
 
   it("refreshes pending list after reject", async () => {
@@ -230,9 +264,9 @@ describe("ApprovalsPage – conflict (HTTP 409)", () => {
     await act(async () => { render(<ApprovalsPage />); });
     await act(async () => { fireEvent.click(screen.getByTestId("btn-approve")); });
 
-    await waitFor(() =>
-      expect(screen.getByTestId("card-notice-conflict")).toHaveTextContent("Already decided")
-    );
+    await waitFor(() => {
+      expect(screen.getByTestId("page-notice")).toHaveTextContent("Conflict: This approval has already been decided.");
+    });
   });
 
   it("still refreshes data after a 409", async () => {
@@ -255,7 +289,7 @@ describe("ApprovalsPage – generic error", () => {
     await act(async () => { fireEvent.click(screen.getByTestId("btn-approve")); });
 
     await waitFor(() =>
-      expect(screen.getByTestId("card-notice-error")).toHaveTextContent("Gmail integration error: token expired")
+      expect(screen.getByTestId("page-notice")).toHaveTextContent("Approval failed: Gmail integration error: token expired")
     );
   });
 
@@ -266,7 +300,7 @@ describe("ApprovalsPage – generic error", () => {
     await act(async () => { render(<ApprovalsPage />); });
     await act(async () => { fireEvent.click(screen.getByTestId("btn-approve")); });
 
-    await waitFor(() => expect(screen.getByTestId("card-notice-error")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("page-notice")).toBeInTheDocument());
     expect(screen.getByTestId("btn-approve")).not.toBeDisabled();
     expect(screen.getByTestId("btn-reject")).not.toBeDisabled();
   });

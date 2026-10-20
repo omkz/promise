@@ -48,6 +48,8 @@ button:disabled { opacity:.5; cursor:not-allowed; }
 button.ghost { background:var(--soft); color:var(--ink); }
 .notice { background:#101318; color:white; border-radius:14px; padding:12px 14px; font-size:13px; margin:16px 0; }
 .notice--error { background:#3b1212; }
+.notice--success { background:#143826; }
+.notice--warning { background:#422a06; }
 .card-notice { border-radius:11px; padding:9px 12px; font-size:12px; font-weight:700; margin-top:8px; }
 .card-notice--success { background:#e8f7ee; color:var(--green); }
 .card-notice--conflict { background:#fff4e2; color:var(--amber); }

@@ -5,6 +5,7 @@ import Nav from "../../components/Nav";
 import AgentRunCard from "../../components/AgentRunCard";
 import ActionHistoryCard from "../../components/ActionHistoryCard";
 import AuditTrailCard from "../../components/AuditTrailCard";
+import { sortActionsNewestFirst } from "../../lib/format";
 import {
   getAgentRun,
   getCommitments,
@@ -52,7 +53,7 @@ export default function ActivityPage() {
     ]);
 
     setRuns(allRuns);
-    setActions(allActions);
+    setActions(sortActionsNewestFirst(allActions));
     setEvents(allEvents);
     setCommitments(Object.fromEntries(allCommitments.map((c) => [c.id, c])));
     setPageNotice(null);
@@ -64,7 +65,7 @@ export default function ActivityPage() {
       .then(([allRuns, allActions, allEvents, allCommitments]) => {
         if (cancelled) return;
         setRuns(allRuns);
-        setActions(allActions);
+        setActions(sortActionsNewestFirst(allActions));
         setEvents(allEvents);
         setCommitments(Object.fromEntries(allCommitments.map((c) => [c.id, c])));
       })
