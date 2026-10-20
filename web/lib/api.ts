@@ -33,15 +33,67 @@ export type Document = { id: string; name: string; content_text: string };
 
 export type Draft = { id: string; recipient: string; subject: string; body: string; status: string };
 
-export type Action = { id: string; type: string; status: string; commitment_id: string | null; payload: Record<string, unknown> };
+export type Action = {
+  id: string;
+  type: string;
+  status: string;
+  commitment_id: string | null;
+  agent_run_id?: string | null;
+  payload: Record<string, unknown>;
+  error?: string | null;
+  result?: Record<string, unknown> | null;
+  idempotency_key?: string;
+  created_at?: string;
+  updated_at?: string;
+  executed_at?: string | null;
+};
 
-export type Approval = { id: string; action_id: string; status: string; requested_at: string; decided_by: string | null };
+export type Approval = {
+  id: string;
+  action_id: string;
+  status: string;
+  requested_at: string;
+  decided_by: string | null;
+  decided_at?: string | null;
+  note?: string | null;
+};
 
-export type AgentRun = { id: string; commitment_id: string | null; trigger: string; status: string; started_at: string; ended_at: string | null };
+export type AgentRun = {
+  id: string;
+  commitment_id: string | null;
+  trigger: string;
+  status: string;
+  started_at: string;
+  ended_at: string | null;
+  error?: string | null;
+  action_ids?: string[];
+  approval_ids?: string[];
+};
 
-export type AgentStep = { id: string; name: string; status: string; output_summary: string | null; started_at: string };
+export type AgentStep = {
+  id: string;
+  name: string;
+  status: string;
+  output_summary: string | null;
+  started_at: string;
+  ended_at?: string | null;
+  error?: string | null;
+  input_summary?: string | null;
+  tool_calls?: string[];
+};
 
-export type AuditEvent = { id: string; event_type: string; summary: string; created_at: string };
+export type AuditEvent = {
+  id: string;
+  event_type: string;
+  summary: string;
+  created_at: string;
+  actor?: string;
+  entity_type?: string;
+  entity_id?: string;
+  agent_run_id?: string | null;
+  action_id?: string | null;
+  approval_id?: string | null;
+};
 
 export type IntegrationAccount = { id: string; provider: string; account_identifier: string; status: string };
 

@@ -75,4 +75,31 @@ h2 { margin:0; font-size:24px; letter-spacing:-.03em; }
 .draft { background:#fbfbfd; border:1px solid var(--line); border-radius:15px; padding:14px; }.draft pre { margin:10px 0 0; white-space:pre-wrap; font:inherit; color:#2f3340; line-height:1.5; }
 .actions { display:flex; gap:10px; margin-top:auto; }.actions button { flex:1; }
 footer { color:var(--muted); text-align:center; font-size:11px; margin-top:24px; }
+
+/* Activity & Audit Trail Page styles */
+.view-tabs { display:flex; gap:8px; margin:20px 0 16px; flex-wrap:wrap; border-bottom:1px solid var(--line); padding-bottom:14px; }
+.view-tab { background:transparent; border:none; color:var(--muted); font-size:14px; font-weight:700; padding:6px 14px; border-radius:10px; cursor:pointer; margin-top:0; transition:all .15s ease; }
+.view-tab:hover { color:var(--ink); background:var(--soft); }
+.view-tab.active { background:var(--accent); color:white; }
+
+.filter-pills { display:flex; gap:8px; margin:12px 0 16px; flex-wrap:wrap; align-items:center; }
+.filter-pill { background:var(--panel); border:1px solid var(--line); color:var(--muted); font-size:12px; font-weight:700; padding:6px 12px; border-radius:99px; cursor:pointer; margin-top:0; display:inline-flex; align-items:center; gap:6px; }
+.filter-pill:hover { border-color:#b8bdca; color:var(--ink); }
+.filter-pill.active { background:var(--accent); color:white; border-color:var(--accent); }
+
+.pill.running { background:#e8f0fe; color:#1a73e8; }
+
+.row-card.action-card.status-failed { border-left:4px solid var(--red); }
+.row-card.action-card.status-rejected { border-left:4px solid var(--red); }
+.row-card.action-card.status-approved { border-left:4px solid var(--green); }
+.row-card.action-card.status-executed { border-left:4px solid var(--green); }
+.row-card.action-card.status-waiting_for_approval { border-left:4px solid var(--amber); }
+
+.tool-tag { font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:11px; background:#eef0f6; color:#444857; padding:2px 6px; border-radius:6px; display:inline-block; }
+.card-toggle-btn { background:none; border:none; color:var(--muted); padding:4px 8px; font-size:12px; font-weight:700; cursor:pointer; margin-top:0; border-radius:6px; }
+.card-toggle-btn:hover { background:var(--soft); color:var(--ink); }
+.badge-count { font-size:11px; padding:1px 6px; border-radius:99px; background:var(--soft); color:var(--muted); }
+.view-tab.active .badge-count { background:rgba(255,255,255,.2); color:white; }
+.filter-pill.active .badge-count { background:rgba(255,255,255,.2); color:white; }
+
 @media (max-width: 850px) { .hero,.grid { grid-template-columns:1fr; } h1 { font-size:48px; } .panel { min-height:auto; } }
