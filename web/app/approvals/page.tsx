@@ -2,120 +2,158 @@
 
 import { useEffect, useState } from "react";
 import Nav from "../../components/Nav";
+import ApprovalCard, { type DecisionState } from "../../components/ApprovalCard";
 import {
-  decideApproval, executeAction, getCommitments, listActions, listPendingApprovals,
-  type Action, type Approval, type Commitment,
+  decideApproval,
+  executeAction,
+  getCommitments,
+  listActions,
+  listPendingApprovals,
+  type Action,
+  type Approval,
+  type Commitment,
 } from "../../lib/api";
-import { formatPayloadKey, formatPayloadValue } from "../../lib/format";
+
+// ---- top-level notice (load errors / backend down) ------------------------------------------
+
+type PageNotice = { kind: "error"; message: string } | { kind: "info"; message: string };
+
+// ---- page -----------------------------------------------------------------------------------
 
 export default function ApprovalsPage() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [actions, setActions] = useState<Record<string, Action>>({});
   const [commitments, setCommitments] = useState<Record<string, Commitment>>({});
-  const [busyId, setBusyId] = useState<string | null>(null);
+  // Per-approval decision state, keyed by approval id.
+  const [states, setStates] = useState<Record<string, DecisionState>>({});
   const [loading, setLoading] = useState(true);
-  const [notice, setNotice] = useState("");
+  const [pageNotice, setPageNotice] = useState<PageNotice | null>(null);
 
-  async function refresh() {
-    const [pending, allActions, allCommitments] = await Promise.all([listPendingApprovals(), listActions(), getCommitments()]);
+  // ---- data loading ------------------------------------------------------------------
+
+  async function loadData(): Promise<void> {
+    const [pending, allActions, allCommitments] = await Promise.all([
+      listPendingApprovals(),
+      listActions(),
+      getCommitments(),
+    ]);
     setApprovals(pending);
     setActions(Object.fromEntries(allActions.map((a) => [a.id, a])));
     setCommitments(Object.fromEntries(allCommitments.map((c) => [c.id, c])));
+    // Reset per-card state for cards that are no longer pending.
+    setStates((prev) => {
+      const stillPendingIds = new Set(pending.map((a) => a.id));
+      const next: Record<string, DecisionState> = {};
+      for (const id of Object.keys(prev)) {
+        if (stillPendingIds.has(id)) next[id] = prev[id];
+      }
+      return next;
+    });
   }
 
   useEffect(() => {
+    let cancelled = false;
     Promise.all([listPendingApprovals(), listActions(), getCommitments()])
       .then(([pending, allActions, allCommitments]) => {
+        if (cancelled) return;
         setApprovals(pending);
         setActions(Object.fromEntries(allActions.map((a) => [a.id, a])));
         setCommitments(Object.fromEntries(allCommitments.map((c) => [c.id, c])));
       })
-      .catch(() => setNotice("Start the backend on port 8000."))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (!cancelled) setPageNotice({ kind: "error", message: "Could not reach the backend — start it on port 8000." });
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
   }, []);
 
+  // ---- per-card state helpers --------------------------------------------------------
+
+  function setCardState(approvalId: string, next: DecisionState) {
+    setStates((prev) => ({ ...prev, [approvalId]: next }));
+  }
+
+  // ---- decision handlers -------------------------------------------------------------
+
   async function approve(a: Approval) {
-    setBusyId(a.id); setNotice("");
+    setCardState(a.id, { type: "loading", decision: "approve" });
     try {
       await decideApproval(a.id, "approved");
       await executeAction(a.action_id);
-      setNotice("Approved and executed.");
+      setCardState(a.id, { type: "success", message: "Approved and executed." });
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : "Failed");
+      const msg = e instanceof Error ? e.message : "Failed";
+      const isConflict = msg.includes("409") || msg.toLowerCase().includes("conflict") || msg.toLowerCase().includes("already");
+      setCardState(a.id, isConflict ? { type: "conflict", message: "Already decided — refreshing…" } : { type: "error", message: msg });
     } finally {
-      // Refresh on failure too (e.g. a 409 because someone/something else already
-      // decided this approval) -- otherwise this row keeps showing PENDING with
-      // active buttons even though the error just said it's already been decided.
-      await refresh().catch(() => {});
-      setBusyId(null);
+      // Refresh after every decision attempt — including failures and 409 conflicts —
+      // so this row disappears (or shows updated status) instead of remaining stale.
+      await loadData().catch(() => {});
     }
   }
 
   async function reject(a: Approval) {
-    setBusyId(a.id); setNotice("");
+    setCardState(a.id, { type: "loading", decision: "reject" });
     try {
       await decideApproval(a.id, "rejected");
-      setNotice("Rejected.");
+      setCardState(a.id, { type: "success", message: "Rejected." });
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : "Failed");
+      const msg = e instanceof Error ? e.message : "Failed";
+      const isConflict = msg.includes("409") || msg.toLowerCase().includes("conflict") || msg.toLowerCase().includes("already");
+      setCardState(a.id, isConflict ? { type: "conflict", message: "Already decided — refreshing…" } : { type: "error", message: msg });
     } finally {
-      await refresh().catch(() => {});
-      setBusyId(null);
+      await loadData().catch(() => {});
     }
   }
+
+  // ---- render ------------------------------------------------------------------------
 
   return (
     <main className="shell">
       <header className="topbar">
-        <div><div className="brand">PROMISE</div><div className="tagline">Your AI follow-through agent.</div></div>
+        <div>
+          <div className="brand">PROMISE</div>
+          <div className="tagline">Your AI follow-through agent.</div>
+        </div>
       </header>
       <Nav />
-      <div className="page-head"><p className="eyebrow">EXTERNAL SIDE EFFECTS WAIT HERE</p><h1>Pending approvals</h1></div>
-      {notice && <div className="notice">{notice}</div>}
+      <div className="page-head">
+        <p className="eyebrow">EXTERNAL SIDE EFFECTS WAIT HERE</p>
+        <h1>Pending approvals</h1>
+      </div>
 
-      <div className="rows">
-        {loading && <div className="empty">Loading approvals…</div>}
-        {!loading && approvals.length === 0 && <div className="empty">Nothing waiting on you right now.</div>}
+      {pageNotice && (
+        <div
+          className={`notice${pageNotice.kind === "error" ? " notice--error" : ""}`}
+          role={pageNotice.kind === "error" ? "alert" : "status"}
+          data-testid="page-notice"
+        >
+          {pageNotice.message}
+        </div>
+      )}
+
+      <div className="rows" data-testid="approvals-list">
+        {loading && <div className="empty" data-testid="loading-indicator">Loading approvals…</div>}
+        {!loading && approvals.length === 0 && (
+          <div className="empty" data-testid="empty-state">Nothing waiting on you right now.</div>
+        )}
+
         {approvals.map((a) => {
           const action = actions[a.action_id];
           const commitment = action?.commitment_id ? commitments[action.commitment_id] : undefined;
-          const payloadEntries = action ? Object.entries(action.payload) : [];
+          const cardState: DecisionState = states[a.id] ?? { type: "idle" };
           return (
-            <div className="row-card stacked" key={a.id}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
-                <div className="meta">
-                  <strong>{action ? action.type.replace(/_/g, " ") : a.action_id}</strong>
-                  <small>
-                    {commitment ? commitment.title : "Unknown commitment"} · Requested{" "}
-                    {new Date(a.requested_at).toLocaleString()}
-                  </small>
-                </div>
-                <span className={`pill ${a.status}`}>{a.status}</span>
-              </div>
-
-              {commitment?.description && (
-                <div className="quote">
-                  <span>Commitment</span>
-                  <p>&ldquo;{commitment.description}&rdquo;</p>
-                </div>
-              )}
-
-              {payloadEntries.length > 0 && (
-                <div className="steps-detail">
-                  {payloadEntries.map(([key, value]) => (
-                    <div className="step-row" key={key}>
-                      <span>{formatPayloadKey(key)}</span>
-                      <span>{formatPayloadValue(value)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="row-actions">
-                <button className="ghost" disabled={busyId === a.id} onClick={() => reject(a)}>Reject</button>
-                <button disabled={busyId === a.id} onClick={() => approve(a)}>Approve & execute</button>
-              </div>
-            </div>
+            <ApprovalCard
+              key={a.id}
+              approval={a}
+              action={action}
+              commitment={commitment}
+              state={cardState}
+              onApprove={approve}
+              onReject={reject}
+            />
           );
         })}
       </div>

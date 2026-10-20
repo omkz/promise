@@ -47,6 +47,11 @@ button { border:0; background:var(--accent); color:white; padding:12px 16px; bor
 button:disabled { opacity:.5; cursor:not-allowed; }
 button.ghost { background:var(--soft); color:var(--ink); }
 .notice { background:#101318; color:white; border-radius:14px; padding:12px 14px; font-size:13px; margin:16px 0; }
+.notice--error { background:#3b1212; }
+.card-notice { border-radius:11px; padding:9px 12px; font-size:12px; font-weight:700; margin-top:8px; }
+.card-notice--success { background:#e8f7ee; color:var(--green); }
+.card-notice--conflict { background:#fff4e2; color:var(--amber); }
+.card-notice--error { background:#fceaea; color:var(--red); }
 .grid { display:grid; grid-template-columns:.95fr 1.05fr; gap:22px; }
 .panel { padding:20px; min-height:470px; }
 .panel-head { display:flex; justify-content:space-between; align-items:flex-start; }
