@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import AskPromiseAI, { DEMO_AI_PROMPT } from "../components/AskPromiseAI";
+import AskPromiseAI from "../components/AskPromiseAI";
 
 // Mock next/link
 vi.mock("next/link", () => ({
@@ -12,57 +12,55 @@ vi.mock("next/link", () => ({
 // Mock api
 vi.mock("../lib/api", () => ({
   invokeStrandsAgent: vi.fn(),
+  createCommitment: vi.fn(),
 }));
 
 import * as api from "../lib/api";
 const mockInvokeStrandsAgent = api.invokeStrandsAgent as ReturnType<typeof vi.fn>;
+const mockCreateCommitment = api.createCommitment as ReturnType<typeof vi.fn>;
 
-describe("AskPromiseAI component", () => {
+describe("AskPromiseAI component (Unified Primary Input)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("renders the panel, input textarea, and buttons", () => {
+  it("renders the primary capture container, textarea, and action buttons without developer demo buttons", () => {
     render(<AskPromiseAI />);
 
-    expect(screen.getByRole("region", { name: "Ask PROMISE AI" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Ask PROMISE AI" })).toBeInTheDocument();
-    expect(screen.getByLabelText("AI prompt")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Ask PROMISE AI" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Use Groq demo prompt" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Capture commitment or ask PROMISE" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Commitment or follow-through instruction")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Follow through" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Quick save" })).toBeInTheDocument();
+
+    // Verifies developer demo buttons are removed from normal UI
+    expect(screen.queryByRole("button", { name: "Use Groq demo prompt" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use demo sentence" })).not.toBeInTheDocument();
   });
 
-  it("populates the input with the demo prompt when clicking 'Use Groq demo prompt'", () => {
+  it("disables buttons when input is empty or whitespace", () => {
     render(<AskPromiseAI />);
 
-    const textarea = screen.getByLabelText("AI prompt") as HTMLTextAreaElement;
-    expect(textarea.value).toBe("");
+    const followThroughBtn = screen.getByRole("button", { name: "Follow through" });
+    const quickSaveBtn = screen.getByRole("button", { name: "Quick save" });
 
-    const demoBtn = screen.getByRole("button", { name: "Use Groq demo prompt" });
-    fireEvent.click(demoBtn);
+    expect(followThroughBtn).toBeDisabled();
+    expect(quickSaveBtn).toBeDisabled();
 
-    expect(textarea.value).toBe(DEMO_AI_PROMPT);
-  });
-
-  it("disables submit button when input is empty or whitespace", () => {
-    render(<AskPromiseAI />);
-
-    const submitBtn = screen.getByRole("button", { name: "Ask PROMISE AI" });
-    expect(submitBtn).toBeDisabled();
-
-    const textarea = screen.getByLabelText("AI prompt");
+    const textarea = screen.getByLabelText("Commitment or follow-through instruction");
     fireEvent.change(textarea, { target: { value: "   " } });
-    expect(submitBtn).toBeDisabled();
+    expect(followThroughBtn).toBeDisabled();
+    expect(quickSaveBtn).toBeDisabled();
 
-    fireEvent.change(textarea, { target: { value: "Hello agent" } });
-    expect(submitBtn).not.toBeDisabled();
+    fireEvent.change(textarea, { target: { value: "I'll send Andi the proposal tomorrow" } });
+    expect(followThroughBtn).not.toBeDisabled();
+    expect(quickSaveBtn).not.toBeDisabled();
   });
 
-  it("calls invokeStrandsAgent, renders response & tool calls, and calls onCommitmentCreated", async () => {
+  it("calls invokeStrandsAgent on Follow through and renders clean output with collapsible diagnostics", async () => {
     const onCommitmentCreated = vi.fn().mockResolvedValue(undefined);
     mockInvokeStrandsAgent.mockResolvedValueOnce({
-      prompt: DEMO_AI_PROMPT,
-      output_text: "I have created the commitment for Andi and planned the follow-through action.",
+      prompt: "I promised Andi I will send the revised Q3 proposal tomorrow at 10 AM.",
+      output_text: "I have recorded your commitment to Andi and prepared the follow-through action.",
       model_provider: "groq",
       model_id: "openai/gpt-oss-120b",
       stop_reason: "end_turn",
@@ -70,7 +68,7 @@ describe("AskPromiseAI component", () => {
         {
           name: "create_commitment",
           toolUseId: "call_commit_1",
-          input: { text: "I will send Andi the revised Q3 proposal tomorrow at 10 AM." },
+          input: { text: "Send Andi the revised Q3 proposal" },
         },
         {
           name: "handle_commitment",
@@ -82,77 +80,85 @@ describe("AskPromiseAI component", () => {
 
     render(<AskPromiseAI onCommitmentCreated={onCommitmentCreated} />);
 
-    // Click demo button
-    fireEvent.click(screen.getByRole("button", { name: "Use Groq demo prompt" }));
-    // Submit
-    fireEvent.click(screen.getByRole("button", { name: "Ask PROMISE AI" }));
+    const textarea = screen.getByLabelText("Commitment or follow-through instruction");
+    fireEvent.change(textarea, { target: { value: "I promised Andi I will send the revised Q3 proposal tomorrow at 10 AM." } });
+    fireEvent.click(screen.getByRole("button", { name: "Follow through" }));
 
     // Busy state appears
-    expect(screen.getByRole("status")).toHaveTextContent("AI agent is orchestrating tools");
+    expect(screen.getByRole("status")).toHaveTextContent("Analyzing commitment and preparing follow-through");
 
     // Wait for resolution
     await waitFor(() => {
-      expect(screen.getByTestId("ai-output-text")).toHaveTextContent("I have created the commitment for Andi");
+      expect(screen.getByTestId("ai-output-text")).toHaveTextContent("I have recorded your commitment to Andi");
     });
 
-    // Verify metadata
-    expect(screen.getByTestId("ai-provider")).toHaveTextContent("groq");
-    expect(screen.getByTestId("ai-model")).toHaveTextContent("openai/gpt-oss-120b");
-    expect(screen.getByTestId("ai-stop-reason")).toHaveTextContent("end_turn");
+    // Clean human-friendly UI: verify approval safeguard reminder with link to /approvals
+    expect(screen.getByText(/Actions require your approval before anything is executed/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Review in Approvals →" })).toHaveAttribute("href", "/approvals");
 
-    // Verify tool calls rendered
-    expect(screen.getByText("Tool Calls Executed (2)")).toBeInTheDocument();
+    // Verify technical diagnostics drawer exists and is collapsible
+    expect(screen.getByTestId("technical-diagnostics")).toBeInTheDocument();
+    expect(screen.getByTestId("diagnostics-provider")).toHaveTextContent("groq");
+    expect(screen.getByTestId("diagnostics-model")).toHaveTextContent("openai/gpt-oss-120b");
+    expect(screen.getByTestId("diagnostics-stop-reason")).toHaveTextContent("end_turn");
     expect(screen.getByTestId("tool-call-0")).toHaveTextContent("create_commitment");
     expect(screen.getByTestId("tool-call-1")).toHaveTextContent("handle_commitment");
 
-    // Verify onCommitmentCreated callback was called to refresh dashboard
+    // Verify onCommitmentCreated callback was executed
     expect(onCommitmentCreated).toHaveBeenCalledTimes(1);
 
-    // Verify approval gating advisory is displayed with link to /approvals
-    expect(screen.getByText(/Approval gating: Proposed external actions require explicit human review/i)).toBeInTheDocument();
-    const approvalsLink = screen.getByRole("link", { name: "Review in Approvals →" });
-    expect(approvalsLink).toHaveAttribute("href", "/approvals");
-
-    // Verify there are NO auto-approve or execute buttons inside the AI panel
+    // Verify NO auto-approve or execute buttons are in this panel
     expect(screen.queryByRole("button", { name: /approve/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
   });
 
-  it("displays configuration or backend execution error clearly in the UI", async () => {
-    mockInvokeStrandsAgent.mockRejectedValueOnce(
-      new Error("Strands agent is disabled. Set STRANDS_ENABLED=true in the environment to enable.")
-    );
-
-    render(<AskPromiseAI />);
-
-    const textarea = screen.getByLabelText("AI prompt");
-    fireEvent.change(textarea, { target: { value: "Create commitment" } });
-    fireEvent.click(screen.getByRole("button", { name: "Ask PROMISE AI" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("alert")).toBeInTheDocument();
+  it("calls createCommitment on Quick save and updates status", async () => {
+    const onCommitmentCreated = vi.fn().mockResolvedValue(undefined);
+    mockCreateCommitment.mockResolvedValueOnce({
+      detected: true,
+      persisted: true,
+      needs_confirmation: false,
+      commitment: {
+        id: "com_quick",
+        title: "Send report to Andi",
+        description: "Send report to Andi tomorrow",
+        due_at: null,
+        status: "open",
+        priority: "medium",
+        confidence: 0.95,
+      },
     });
 
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Strands agent is disabled. Set STRANDS_ENABLED=true in the environment to enable."
-    );
+    render(<AskPromiseAI onCommitmentCreated={onCommitmentCreated} />);
+
+    const textarea = screen.getByLabelText("Commitment or follow-through instruction");
+    fireEvent.change(textarea, { target: { value: "Send report to Andi tomorrow" } });
+    fireEvent.click(screen.getByRole("button", { name: "Quick save" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("Commitment remembered.");
+    });
+
+    expect(mockCreateCommitment).toHaveBeenCalledWith("Send report to Andi tomorrow");
+    expect(onCommitmentCreated).toHaveBeenCalledTimes(1);
+    expect((textarea as HTMLTextAreaElement).value).toBe("");
   });
 
-  it("allows clearing output and error with Clear output button", async () => {
-    mockInvokeStrandsAgent.mockRejectedValueOnce(new Error("Provider timeout"));
+  it("displays configuration or backend execution error clearly in the UI", async () => {
+    mockInvokeStrandsAgent.mockRejectedValueOnce(
+      new Error("Strands agent execution failed with provider 'groq': rate limit")
+    );
 
     render(<AskPromiseAI />);
 
-    fireEvent.change(screen.getByLabelText("AI prompt"), { target: { value: "test" } });
-    fireEvent.click(screen.getByRole("button", { name: "Ask PROMISE AI" }));
+    const textarea = screen.getByLabelText("Commitment or follow-through instruction");
+    fireEvent.change(textarea, { target: { value: "Create commitment" } });
+    fireEvent.click(screen.getByRole("button", { name: "Follow through" }));
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
     });
 
-    const clearBtn = screen.getByRole("button", { name: "Clear output" });
-    fireEvent.click(clearBtn);
-
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Strands agent execution failed with provider 'groq': rate limit");
   });
 });

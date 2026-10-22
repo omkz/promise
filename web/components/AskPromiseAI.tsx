@@ -2,10 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { invokeStrandsAgent, type StrandsInvokeResult } from "../lib/api";
-
-export const DEMO_AI_PROMPT =
-  "I promised Andi I will send the revised Q3 proposal tomorrow at 10 AM. Create this commitment and prepare the action to handle it.";
+import { invokeStrandsAgent, createCommitment, type StrandsInvokeResult } from "../lib/api";
 
 type AskPromiseAIProps = {
   onCommitmentCreated?: () => void | Promise<void>;
@@ -15,163 +12,219 @@ export default function AskPromiseAI({ onCommitmentCreated }: AskPromiseAIProps)
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [result, setResult] = useState<StrandsInvokeResult | null>(null);
 
-  async function handleSubmit(e?: React.FormEvent) {
+  async function handleFollowThrough(e?: React.FormEvent) {
     if (e) e.preventDefault();
     const cleanPrompt = prompt.trim();
     if (!cleanPrompt || busy) return;
 
     setBusy(true);
     setError(null);
+    setNotice(null);
 
     try {
       const res = await invokeStrandsAgent(cleanPrompt);
       setResult(res);
+      setPrompt("");
       if (onCommitmentCreated) {
         await onCommitmentCreated();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Strands AI agent invocation failed");
+      const msg = err instanceof Error ? err.message : "AI follow-through failed";
+      // Graceful fallback to deterministic capture if Strands agent is not enabled
+      if (msg.includes("Strands agent is disabled")) {
+        try {
+          const detRes = await createCommitment(cleanPrompt);
+          if (detRes.persisted) {
+            setNotice("Commitment remembered. (AI agent is currently disabled; enable STRANDS_ENABLED=true for automated follow-through planning.)");
+            setPrompt("");
+            if (onCommitmentCreated) await onCommitmentCreated();
+          } else {
+            setError(detRes.reason ?? "Could not detect a commitment.");
+          }
+        } catch (detErr) {
+          setError(detErr instanceof Error ? detErr.message : msg);
+        }
+      } else {
+        setError(msg);
+      }
     } finally {
       setBusy(false);
     }
   }
 
-  function handleUseDemoPrompt() {
-    setPrompt(DEMO_AI_PROMPT);
+  async function handleQuickSave() {
+    const cleanPrompt = prompt.trim();
+    if (!cleanPrompt || busy) return;
+
+    setBusy(true);
     setError(null);
+    setNotice(null);
+    setResult(null);
+
+    try {
+      const res = await createCommitment(cleanPrompt);
+      if (res.persisted) {
+        setNotice("Commitment remembered.");
+        setPrompt("");
+        if (onCommitmentCreated) {
+          await onCommitmentCreated();
+        }
+      } else if (res.needs_confirmation) {
+        setNotice(res.message ?? "Needs confirmation — try rephrasing.");
+      } else {
+        setError(res.reason ?? "That didn't read as a commitment.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to record commitment");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleFollowThrough();
+    }
   }
 
   return (
-    <section className="ai-section" aria-label="Ask PROMISE AI" style={{ marginBottom: "28px" }}>
-      <div className="panel ai-panel" style={{ minHeight: "auto" }}>
-        <div className="panel-head">
-          <div>
-            <p className="eyebrow">AUTONOMOUS MULTI-TOOL AGENT</p>
-            <h2>Ask PROMISE AI</h2>
-            <p className="sub" style={{ fontSize: "14px", marginTop: "6px" }}>
-              Orchestrate follow-through tasks with Strands Agents (Groq, Gemini, Anthropic, Bedrock).
-            </p>
-          </div>
-        </div>
-
-        <form onSubmit={handleSubmit} className="ai-form" style={{ marginTop: "16px" }}>
-          <label
-            htmlFor="ai-prompt-input"
-            style={{ fontSize: "12px", fontWeight: 800, color: "var(--muted)", display: "block", marginBottom: "8px" }}
-          >
-            Instructions or commitment request
+    <section className="primary-capture" aria-label="Capture commitment or ask PROMISE">
+      <div className="capture-container">
+        <form onSubmit={handleFollowThrough}>
+          <label htmlFor="primary-prompt-input" className="sr-only">
+            Capture a commitment or ask PROMISE
           </label>
           <textarea
-            id="ai-prompt-input"
+            id="primary-prompt-input"
+            className="capture-textarea"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder={DEMO_AI_PROMPT}
-            rows={3}
+            onKeyDown={handleKeyDown}
+            placeholder="Capture a commitment or ask PROMISE to follow through… (e.g. 'I promised Andi the revised proposal tomorrow at 10 AM')"
+            rows={2}
             disabled={busy}
-            aria-label="AI prompt"
+            aria-label="Commitment or follow-through instruction"
           />
-          <div style={{ display: "flex", gap: "10px", marginTop: "10px", flexWrap: "wrap" }}>
-            <button type="submit" disabled={busy || !prompt.trim()}>
-              {busy ? "Running AI Agent…" : "Ask PROMISE AI"}
-            </button>
-            <button
-              type="button"
-              className="ghost"
-              onClick={handleUseDemoPrompt}
-              disabled={busy}
-            >
-              Use Groq demo prompt
-            </button>
-            {(result || error) && (
+
+          <div className="capture-toolbar">
+            <div className="capture-hint">
+              <span className="sparkle-icon">✦</span>
+              <span>AI Follow-through</span>
+            </div>
+
+            <div className="capture-actions">
               <button
                 type="button"
-                className="ghost"
-                onClick={() => {
-                  setResult(null);
-                  setError(null);
-                }}
-                disabled={busy}
+                className="btn-secondary"
+                onClick={handleQuickSave}
+                disabled={busy || !prompt.trim()}
               >
-                Clear output
+                Quick save
               </button>
-            )}
+              <button
+                type="submit"
+                className="btn-primary"
+                disabled={busy || !prompt.trim()}
+              >
+                {busy ? "Processing…" : "Follow through"}
+              </button>
+            </div>
           </div>
         </form>
 
         {busy && (
-          <div className="card-notice card-notice--conflict" style={{ marginTop: "16px" }} role="status">
-            <span>⚡ AI agent is orchestrating tools and retrieving context…</span>
+          <div className="status-banner status-banner--processing" role="status">
+            <div>
+              <span className="pulse-dot" />
+              <span>Analyzing commitment and preparing follow-through…</span>
+            </div>
+          </div>
+        )}
+
+        {notice && (
+          <div className="status-banner status-banner--success" role="status">
+            <span>✓ {notice}</span>
+            <button type="button" className="banner-dismiss" onClick={() => setNotice(null)} aria-label="Dismiss notice">✕</button>
           </div>
         )}
 
         {error && (
-          <div className="notice notice--error" role="alert" style={{ marginTop: "16px" }}>
-            <strong>Configuration / Execution Error:</strong> {error}
+          <div className="status-banner status-banner--error" role="alert">
+            <span>{error}</span>
+            <button type="button" className="banner-dismiss" onClick={() => setError(null)} aria-label="Dismiss error">✕</button>
           </div>
         )}
 
         {result && (
-          <div className="ai-result" style={{ marginTop: "20px", borderTop: "1px solid var(--line)", paddingTop: "16px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
-              <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-                <span className="pill approved" data-testid="ai-provider">{result.model_provider}</span>
-                <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)" }} data-testid="ai-model">{result.model_id}</span>
-                <span className="pill" data-testid="ai-stop-reason">{result.stop_reason}</span>
+          <div className="ai-feedback-card" data-testid="ai-feedback-card">
+            <div className="ai-feedback-header">
+              <div className="ai-feedback-title">
+                <span className="ai-badge">PROMISE AI</span>
+                <span>Follow-through complete</span>
               </div>
-              <span style={{ fontSize: "12px", color: "var(--muted)" }}>
-                {result.tool_calls.length} tool call{result.tool_calls.length === 1 ? "" : "s"} executed
-              </span>
+              <button
+                type="button"
+                className="btn-text"
+                onClick={() => setResult(null)}
+              >
+                Dismiss
+              </button>
             </div>
 
-            <div className="ai-response" style={{ marginTop: "12px", background: "#fbfbfd", border: "1px solid var(--line)", borderRadius: "14px", padding: "14px" }}>
-              <span style={{ color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".12em", fontSize: "10px", fontWeight: 800, display: "block", marginBottom: "6px" }}>
-                Agent Response
-              </span>
-              <p style={{ margin: 0, lineHeight: 1.5, whiteSpace: "pre-wrap" }} data-testid="ai-output-text">
-                {result.output_text || "(No response text returned)"}
-              </p>
-            </div>
+            <p className="ai-feedback-text" data-testid="ai-output-text">
+              {result.output_text || "Action planned successfully and waiting for approval."}
+            </p>
 
-            {result.tool_calls.length > 0 && (
-              <div style={{ marginTop: "16px" }}>
-                <span style={{ color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".12em", fontSize: "10px", fontWeight: 800, display: "block", marginBottom: "8px" }}>
-                  Tool Calls Executed ({result.tool_calls.length})
-                </span>
-                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                  {result.tool_calls.map((tc, idx) => (
-                    <div
-                      key={idx}
-                      style={{ background: "#ffffff", border: "1px solid var(--line)", borderRadius: "12px", padding: "10px 14px" }}
-                      data-testid={`tool-call-${idx}`}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span className="tool-tag">{tc.name}</span>
-                        {tc.toolUseId && (
-                          <small style={{ color: "var(--muted)", fontFamily: "monospace" }}>{tc.toolUseId}</small>
-                        )}
-                      </div>
-                      {tc.input != null && (
-                        <pre style={{ margin: "8px 0 0", padding: "8px 10px", background: "#f8f9fc", border: "1px solid var(--line)", borderRadius: "8px", fontSize: "11px", overflowX: "auto" }}>
-                          {typeof tc.input === "string" ? tc.input : JSON.stringify(tc.input, null, 2)}
-                        </pre>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div
-              className="card-notice card-notice--conflict"
-              style={{ marginTop: "16px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}
-            >
-              <span>🔒 Approval gating: Proposed external actions require explicit human review.</span>
-              <Link href="/approvals" style={{ color: "var(--amber)", fontWeight: 800, textDecoration: "underline" }}>
+            <div className="approval-safeguard-banner">
+              <span>🔒 Actions require your approval before anything is executed.</span>
+              <Link href="/approvals" className="safeguard-link">
                 Review in Approvals →
               </Link>
             </div>
+
+            {/* Technical Diagnostics (Collapsible for developers/evaluators, separated from normal UI) */}
+            <details className="diagnostics-drawer" data-testid="technical-diagnostics">
+              <summary className="diagnostics-summary">
+                Technical diagnostics ({result.tool_calls?.length || 0} tool call{(result.tool_calls?.length || 0) === 1 ? "" : "s"})
+              </summary>
+              <div className="diagnostics-body">
+                <div className="diagnostics-row">
+                  <span className="diagnostics-label">Provider</span>
+                  <span className="diagnostics-value" data-testid="diagnostics-provider">{result.model_provider}</span>
+                </div>
+                <div className="diagnostics-row">
+                  <span className="diagnostics-label">Model</span>
+                  <span className="diagnostics-value" data-testid="diagnostics-model">{result.model_id}</span>
+                </div>
+                <div className="diagnostics-row">
+                  <span className="diagnostics-label">Stop reason</span>
+                  <span className="diagnostics-value" data-testid="diagnostics-stop-reason">{result.stop_reason}</span>
+                </div>
+
+                {result.tool_calls && result.tool_calls.length > 0 && (
+                  <div className="diagnostics-tools-list">
+                    <span className="diagnostics-label">Executed Tool Calls:</span>
+                    {result.tool_calls.map((tc, idx) => (
+                      <div key={idx} className="diagnostics-tool-item" data-testid={`tool-call-${idx}`}>
+                        <div className="diagnostics-tool-name">
+                          <code>{tc.name}</code>
+                          {tc.toolUseId && <small>{tc.toolUseId}</small>}
+                        </div>
+                        {tc.input != null && (
+                          <pre className="diagnostics-payload">
+                            {typeof tc.input === "string" ? tc.input : JSON.stringify(tc.input, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </details>
           </div>
         )}
       </div>
