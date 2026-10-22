@@ -451,3 +451,35 @@ def disconnect_integration_account(ctx: AppContext, *, workspace_id: str, user_i
         workspace_id, account_id, lambda a: setattr(a, "status", IntegrationStatus.DISCONNECTED)
     )
 
+
+# ---- Strands Agents SDK ---------------------------------------------------
+
+
+def invoke_strands_agent(
+    ctx: AppContext,
+    *,
+    workspace_id: str,
+    user_id: str,
+    prompt: str,
+    config: Any = None,
+    model: Any = None,
+) -> dict[str, Any]:
+    """Invoke the optional Strands agent (with Gemini/OpenAI/Anthropic/Bedrock).
+
+    Fails closed with StrandsDisabledError when STRANDS_ENABLED=false.
+    Exposes only explicitly validated PROMISE tools; models cannot approve or execute actions.
+    """
+    from promise_agent.strands_agent import StrandsAgentService
+
+    service = StrandsAgentService()
+    result = service.invoke(
+        ctx,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        prompt=prompt,
+        config=config,
+        model=model,
+    )
+    return result.to_dict()
+
+

@@ -16,6 +16,7 @@ from promise_app.identity import authenticate
 from promise_auth import AuthenticatedPrincipal, AuthRequest, Permission, require
 from promise_domain.models import Commitment, CommitmentSource, Contact
 from pydantic import BaseModel
+from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -315,14 +316,29 @@ def complete_commitment(commitment_id: str, mcp_ctx: Context | None = None) -> d
     return _dump(tools.complete_commitment(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, commitment_id=commitment_id))
 
 
+@mcp.tool()
+def invoke_strands_agent(prompt: str, mcp_ctx: Context | None = None) -> dict[str, Any]:
+    """Invoke the optional Strands agent (Gemini/OpenAI/Anthropic/Bedrock) to interact with PROMISE commitments.
+    Requires STRANDS_ENABLED=true in the environment."""
+    principal = _authenticate(mcp_ctx)
+    require(principal, Permission.AGENT_EXECUTE)
+    return _dump(tools.invoke_strands_agent(ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, prompt=prompt))
+
+
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "service": "promise-mcp", "mcp": "/mcp"})
 
 
-app = mcp.streamable_http_app(stateless_http=True, host=os.getenv("HOST", "127.0.0.1"))
-allowed_origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=allowed_origins or ["http://localhost:3000"], allow_methods=["*"], allow_headers=["*"])
+def create_app() -> Starlette:
+    app = mcp.streamable_http_app(stateless_http=True, host=os.getenv("HOST", "127.0.0.1"))
+    allowed_origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
+    app.add_middleware(CORSMiddleware, allow_origins=allowed_origins or ["http://localhost:3000"], allow_methods=["*"], allow_headers=["*"])
+    return app
+
+
+app = create_app()
+
 
 if __name__ == "__main__":
     import uvicorn

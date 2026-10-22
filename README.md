@@ -873,6 +873,73 @@ tests/test_calendar_authorization.py`
 — `httpx.MockTransport`-backed fakes for every Google HTTP call, no live network or real Google
 credentials required.
 
+## Strands Agents Integration
+
+PROMISE includes an optional, provider-flexible agent service built on the [Strands Agents SDK](https://github.com/strands-agents/strands-agents) (`strands-agents`). It allows conversational orchestration over PROMISE tools using foundation models while strictly preserving PROMISE's deterministic core, workspace authorization, and mandatory approval gating.
+
+### 1. Supported Model Providers
+
+The model provider is selected via a pluggable model factory (`StrandsModelFactory`) without altering application or orchestrator logic:
+
+| Provider (`STRANDS_MODEL_PROVIDER`) | Default Model (`STRANDS_MODEL_ID`) | Required Credentials |
+| :--- | :--- | :--- |
+| **`google`** | `gemini-2.5-flash` | `GEMINI_API_KEY` |
+| **`openai`** | `gpt-4o` | `OPENAI_API_KEY` |
+| **`anthropic`** | `claude-3-5-sonnet-latest` | `ANTHROPIC_API_KEY` |
+| **`bedrock`** | `anthropic.claude-sonnet-4-20250514-v1:0` | AWS credentials / `AWS_REGION` |
+
+### 2. Environment Configuration
+
+```bash
+# Enable the Strands agent (disabled by default)
+STRANDS_ENABLED=true
+STRANDS_MODEL_PROVIDER=google
+STRANDS_MODEL_ID=gemini-2.5-flash
+GEMINI_API_KEY=your-gemini-api-key
+```
+
+When `STRANDS_ENABLED=false` (the default), PROMISE runs purely on its deterministic rule-based workflows, and all 570+ existing tests execute completely offline without external network or API keys.
+
+### 3. Security, Scoping, and Approval Gating
+
+- **No Arbitrary Execution**: The model is never given raw database, filesystem, or arbitrary Python access.
+- **Strictly Scoped Tools**: Every tool function (`create_commitment`, `list_commitments`, `get_commitment`, `handle_commitment`, `list_pending_approvals`, `get_action`, `list_contacts`, `list_documents`) is bound at invocation time to the caller's authenticated `workspace_id` and `user_id`.
+- **Mandatory Human Approval (No Self-Approval)**: `decide_approval` and `execute_approved_action` are intentionally **omitted** from the agent's toolset. When the agent calls `handle_commitment`, PROMISE context retrieval and action planning stage a proposed action in `waiting_for_approval` status. The model cannot approve or execute this action; external side effects strictly require human approval through the Web UI or `/api/approvals/{id}/decide`.
+- **Audit Logging**: Every invocation records structured audit trail events (`strands_agent.invoked`, `strands_agent.completed`, or `strands_agent.failed`).
+
+### 4. End-to-End Workflow
+
+1. **User asks agent**: *"I promised Andi I'll send the revised proposal tomorrow morning. Can you prepare this?"*
+2. **Commitment Capture**: The agent invokes tool `create_commitment(text=...)`, persisting a high-confidence commitment with full provenance.
+3. **Context Retrieval & Planning**: The agent invokes `handle_commitment(commitment_id=...)`. PROMISE retrieves `doc_andi_v3`, Sarah's feedback, and Andi's email contact, and stages a `send_message` action in `waiting_for_approval` status.
+4. **Agent Confirmation**: The agent responds informing the user that the action and draft email are prepared and awaiting human approval.
+5. **Human Approval**: The user reviews the draft on the Web UI Approvals screen or calls `POST /api/approvals/{id}/decide` to approve and execute the side effect safely.
+
+### 5. Live Gemini Smoke Test
+
+To verify the Strands integration live with a real Google Gemini API key:
+
+```bash
+STRANDS_ENABLED=true \
+STRANDS_MODEL_PROVIDER=google \
+STRANDS_MODEL_ID=gemini-2.5-flash \
+GEMINI_API_KEY="<YOUR_GEMINI_API_KEY>" \
+uv run python -c "
+from promise_app.bootstrap import build_context
+from promise_app.seed import seed
+from promise_app import tools
+
+ctx = seed(build_context())
+result = tools.invoke_strands_agent(
+    ctx,
+    workspace_id=ctx.default_workspace_id,
+    user_id=ctx.default_user_id,
+    prompt='List my open commitments and tell me what pending approvals exist.'
+)
+print('Agent response:\n', result['output_text'])
+"
+```
+
 ## Known limitations / next steps
 
 - Identity & Authorization is v1 (see the section above): `AUTH_MODE=oidc` validates real

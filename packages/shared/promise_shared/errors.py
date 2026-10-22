@@ -286,3 +286,26 @@ class AttachmentTooLarge(PromiseError):
         self.document_id = document_id
         self.size_bytes = size_bytes
         self.max_bytes = max_bytes
+
+
+# ---- Strands Agents SDK integration -----------------------------------------------------------
+
+
+class StrandsError(PromiseError):
+    """Base exception for Strands Agents SDK operations."""
+
+
+class StrandsDisabledError(StrandsError):
+    """Raised when Strands agent invocation is attempted while STRANDS_ENABLED is false."""
+
+    def __init__(self, message: str = "Strands agent is disabled. Set STRANDS_ENABLED=true to enable.") -> None:
+        super().__init__(message)
+
+
+class StrandsConfigurationError(StrandsError):
+    """Raised when Strands agent configuration is missing or invalid."""
+
+
+class StrandsExecutionError(StrandsError):
+    """Raised when Strands agent execution fails or encounters provider errors."""
+

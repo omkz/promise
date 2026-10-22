@@ -79,3 +79,24 @@ def list_audit_events(
 ) -> list[AuditEvent]:
     require(principal, Permission.COMMITMENTS_READ)
     return tools.list_audit_events(ctx, workspace_id=principal.workspace_id)
+
+
+class StrandsInvokeBody(BaseModel):
+    prompt: str
+
+
+@router.post("/agent/strands/invoke")
+def invoke_strands_agent(
+    body: StrandsInvokeBody,
+    principal: AuthenticatedPrincipal = Depends(get_principal),
+    ctx: AppContext = Depends(get_context),
+) -> dict[str, Any]:
+    """Invoke the optional Strands agent. Fails with 400 if STRANDS_ENABLED is false."""
+    require(principal, Permission.AGENT_EXECUTE)
+    return tools.invoke_strands_agent(
+        ctx,
+        workspace_id=principal.workspace_id,
+        user_id=principal.user_id,
+        prompt=body.prompt,
+    )
+

@@ -35,6 +35,9 @@ from promise_shared.errors import (
     LLMProviderError,
     NotFoundError,
     PromiseError,
+    StrandsConfigurationError,
+    StrandsDisabledError,
+    StrandsExecutionError,
     TokenExpired,
     WorkspaceAccessDenied,
     WorkspaceAccessError,
@@ -123,6 +126,22 @@ def _llm_provider_error(_: Request, exc: LLMProviderError) -> JSONResponse:
     return JSONResponse(
         {"error": str(exc), "provider": exc.provider_name, "retryable": exc.retryable}, status_code=503
     )
+
+
+@app.exception_handler(StrandsDisabledError)
+def _strands_disabled(_: Request, exc: StrandsDisabledError) -> JSONResponse:
+    return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.exception_handler(StrandsConfigurationError)
+def _strands_configuration_error(_: Request, exc: StrandsConfigurationError) -> JSONResponse:
+    return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.exception_handler(StrandsExecutionError)
+def _strands_execution_error(_: Request, exc: StrandsExecutionError) -> JSONResponse:
+    return JSONResponse({"error": str(exc)}, status_code=502)
+
 
 
 # ---- external integration providers (Gmail, ...) -------------------------------------------
