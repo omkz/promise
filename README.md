@@ -946,7 +946,7 @@ print('Agent response:\n', result['output_text'])
 
 ### 6. Live Groq Smoke Test
 
-To verify with a Groq API key:
+To verify Groq tool-calling with a live Groq API key:
 
 ```bash
 STRANDS_ENABLED=true \
@@ -957,15 +957,31 @@ uv run python -c "
 from promise_app.bootstrap import build_context
 from promise_app.seed import seed
 from promise_app import tools
+from promise_domain.enums import ActionStatus, ApprovalStatus
 
 ctx = seed(build_context())
 result = tools.invoke_strands_agent(
     ctx,
     workspace_id=ctx.default_workspace_id,
     user_id=ctx.default_user_id,
-    prompt='List my open commitments.'
+    prompt='I promised Andi I will send the revised Q3 proposal tomorrow at 10am. Please create this commitment and prepare the action to handle it.'
 )
 print('Agent response:\n', result['output_text'])
+print('Tool calls executed:', len(result['tool_calls']))
+
+# Verification in Application Context (never trust model text alone):
+open_commitments = tools.search_commitments(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id)
+matching = [c for c in open_commitments if 'proposal' in c.description.lower()]
+assert matching, 'Verification failed: commitment was not persisted in database!'
+print('Verified commitment persisted:', matching[0].id)
+
+pending_approvals = tools.list_pending_approvals(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id)
+assert pending_approvals, 'Verification failed: pending approval was not persisted!'
+action = tools.get_action(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, action_id=pending_approvals[0].action_id)
+assert action.status == ActionStatus.WAITING_FOR_APPROVAL, 'Action must be waiting for approval'
+assert action.status != ActionStatus.EXECUTED, 'Action must not be executed without explicit approval'
+print('Verified action waiting for approval:', action.id, 'with approval:', pending_approvals[0].id)
+print('Approval gate intact: external action was not executed.')
 "
 ```
 

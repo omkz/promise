@@ -55,6 +55,7 @@ class StrandsModelFactory:
                         "base_url": "https://api.groq.com/openai/v1",
                     },
                     model_id=config.model_id,
+                    params={"extra_body": {"include_reasoning": False}},
                 )
 
             if config.provider == "bedrock":

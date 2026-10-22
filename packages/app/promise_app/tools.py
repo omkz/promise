@@ -373,6 +373,13 @@ def list_actions(ctx: AppContext, *, workspace_id: str, user_id: str, commitment
     ]
 
 
+def get_action(ctx: AppContext, *, workspace_id: str, user_id: str, action_id: str) -> Action:
+    """Retrieve an action by ID, enforcing user ownership via its linked commitment."""
+    action = ctx.repos.actions.require(workspace_id, action_id)
+    _require_owned_action(ctx, workspace_id=workspace_id, action=action, user_id=user_id)
+    return action
+
+
 def list_agent_runs(ctx: AppContext, *, workspace_id: str, user_id: str) -> list[AgentRun]:
     """`AgentRun` already carries its own `user_id` (unlike Action/Approval) —
     no transitive lookup needed, same field `get_agent_run` checks."""

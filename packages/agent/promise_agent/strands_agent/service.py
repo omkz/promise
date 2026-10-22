@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from promise_shared.errors import StrandsDisabledError, StrandsExecutionError
@@ -24,6 +24,7 @@ class StrandsExecutionResult:
     model_provider: str
     model_id: str
     stop_reason: str
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +33,7 @@ class StrandsExecutionResult:
             "model_provider": self.model_provider,
             "model_id": self.model_id,
             "stop_reason": self.stop_reason,
+            "tool_calls": self.tool_calls,
         }
 
 
@@ -117,6 +119,13 @@ class StrandsAgentService:
 
         stop_reason = getattr(result, "stop_reason", "end_turn") or "end_turn"
 
+        tool_calls: list[dict[str, Any]] = []
+        if hasattr(agent, "messages"):
+            for m in agent.messages:
+                for c in m.get("content", []):
+                    if isinstance(c, dict) and "toolUse" in c:
+                        tool_calls.append(c["toolUse"])
+
         audit.record(
             ctx.agent_repos,
             workspace_id=workspace_id,
@@ -124,7 +133,7 @@ class StrandsAgentService:
             event_type="strands_agent.completed",
             entity_type="strands_agent",
             entity_id=user_id,
-            summary="Strands agent completed invocation successfully",
+            summary=f"Strands agent completed invocation successfully with {len(tool_calls)} tool call(s)",
         )
 
         return StrandsExecutionResult(
@@ -133,4 +142,5 @@ class StrandsAgentService:
             model_provider=cfg.provider,
             model_id=cfg.model_id,
             stop_reason=str(stop_reason),
+            tool_calls=tool_calls,
         )
