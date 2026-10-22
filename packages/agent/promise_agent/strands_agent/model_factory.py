@@ -46,6 +46,17 @@ class StrandsModelFactory:
                     model_id=config.model_id,
                 )
 
+            if config.provider == "groq":
+                from strands.models.openai import OpenAIModel
+
+                return OpenAIModel(
+                    client_args={
+                        "api_key": config.groq_api_key,
+                        "base_url": "https://api.groq.com/openai/v1",
+                    },
+                    model_id=config.model_id,
+                )
+
             if config.provider == "bedrock":
                 from strands.models.bedrock import BedrockModel
 

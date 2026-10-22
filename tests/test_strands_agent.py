@@ -134,6 +134,20 @@ def test_strands_configuration_loading(monkeypatch):
     assert cfg.gemini_api_key == "test-key-gemini"
 
 
+def test_strands_configuration_loading_groq(monkeypatch):
+    """Verifies Groq configuration defaults to openai/gpt-oss-120b and reads GROQ_API_KEY."""
+    monkeypatch.setenv("STRANDS_ENABLED", "true")
+    monkeypatch.setenv("STRANDS_MODEL_PROVIDER", "groq")
+    monkeypatch.delenv("STRANDS_MODEL_ID", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "test-key-groq")
+
+    cfg = load_strands_config()
+    assert cfg.enabled is True
+    assert cfg.provider == "groq"
+    assert cfg.model_id == "openai/gpt-oss-120b"
+    assert cfg.groq_api_key == "test-key-groq"
+
+
 def test_strands_configuration_validation_errors():
     """Misconfigured providers or missing credentials must raise StrandsConfigurationError."""
     # 1. Unsupported provider
@@ -155,6 +169,11 @@ def test_strands_configuration_validation_errors():
     with pytest.raises(StrandsConfigurationError) as exc:
         validate_strands_config(StrandsConfig(enabled=True, provider="anthropic", anthropic_api_key=None))
     assert "ANTHROPIC_API_KEY is required" in str(exc.value)
+
+    # 5. Groq provider missing GROQ_API_KEY
+    with pytest.raises(StrandsConfigurationError) as exc:
+        validate_strands_config(StrandsConfig(enabled=True, provider="groq", groq_api_key=None))
+    assert "GROQ_API_KEY is required" in str(exc.value)
 
 
 def test_strands_model_factory():
@@ -182,6 +201,16 @@ def test_strands_model_factory():
     b_model = StrandsModelFactory.create_model(b_cfg)
     assert isinstance(b_model, BedrockModel)
     assert b_model.get_config()["model_id"] == "anthropic.claude-sonnet-4-20250514-v1:0"
+
+    # Groq (reuses OpenAIModel with Groq base_url)
+    gr_cfg = StrandsConfig(enabled=True, provider="groq", model_id="openai/gpt-oss-120b", groq_api_key="fake-groq")
+    gr_model = StrandsModelFactory.create_model(gr_cfg)
+    assert isinstance(gr_model, OpenAIModel)
+    assert gr_model.get_config()["model_id"] == "openai/gpt-oss-120b"
+    assert gr_model.client_args == {
+        "api_key": "fake-groq",
+        "base_url": "https://api.groq.com/openai/v1",
+    }
 
 
 # ---- Tool Registry & Authorization Safety --------------------------------------------------
@@ -329,6 +358,38 @@ def test_strands_agent_tool_invocation_loop(seeded_ctx):
         user_id=seeded_ctx.default_user_id,
     )
     assert any("Andi" in c.description for c in open_commitments)
+
+
+def test_strands_groq_orchestration_with_mock_model(seeded_ctx):
+    """Tests StrandsAgentService invocation with provider='groq' using MockStrandsModel."""
+    config = StrandsConfig(
+        enabled=True,
+        provider="groq",
+        model_id="openai/gpt-oss-120b",
+        groq_api_key="fake-groq-key",
+    )
+    mock_model = MockStrandsModel()
+
+    service = StrandsAgentService(default_config=config)
+    res = service.invoke(
+        seeded_ctx,
+        workspace_id=seeded_ctx.default_workspace_id,
+        user_id=seeded_ctx.default_user_id,
+        prompt="List my commitments using Groq",
+        config=config,
+        model=mock_model,
+    )
+
+    assert res.output_text == "I have checked your commitments."
+    assert res.model_provider == "groq"
+    assert res.model_id == "openai/gpt-oss-120b"
+    assert res.stop_reason == "end_turn"
+
+    # Verify audit event carries groq provider
+    events = tools.list_audit_events(seeded_ctx, workspace_id=seeded_ctx.default_workspace_id)
+    invoked_events = [e for e in events if e.event_type == "strands_agent.invoked"]
+    assert any("groq" in e.summary for e in invoked_events)
+
 
 
 

@@ -887,6 +887,10 @@ The model provider is selected via a pluggable model factory (`StrandsModelFacto
 | **`openai`** | `gpt-4o` | `OPENAI_API_KEY` |
 | **`anthropic`** | `claude-3-5-sonnet-latest` | `ANTHROPIC_API_KEY` |
 | **`bedrock`** | `anthropic.claude-sonnet-4-20250514-v1:0` | AWS credentials / `AWS_REGION` |
+| **`groq`** | `openai/gpt-oss-120b` | `GROQ_API_KEY` |
+
+> [!NOTE]
+> For Groq, the model factory reuses Strands' OpenAI model implementation targeting `https://api.groq.com/openai/v1`. Groq is not free or unlimited; usage is subject to Groq's official pricing (per million tokens) and tier-based rate limits (RPM / RPD / TPM) per model as documented at [groq.com/pricing](https://groq.com/pricing).
 
 ### 2. Environment Configuration
 
@@ -935,6 +939,31 @@ result = tools.invoke_strands_agent(
     workspace_id=ctx.default_workspace_id,
     user_id=ctx.default_user_id,
     prompt='List my open commitments and tell me what pending approvals exist.'
+)
+print('Agent response:\n', result['output_text'])
+"
+```
+
+### 6. Live Groq Smoke Test
+
+To verify with a Groq API key:
+
+```bash
+STRANDS_ENABLED=true \
+STRANDS_MODEL_PROVIDER=groq \
+STRANDS_MODEL_ID=openai/gpt-oss-120b \
+GROQ_API_KEY="<YOUR_GROQ_API_KEY>" \
+uv run python -c "
+from promise_app.bootstrap import build_context
+from promise_app.seed import seed
+from promise_app import tools
+
+ctx = seed(build_context())
+result = tools.invoke_strands_agent(
+    ctx,
+    workspace_id=ctx.default_workspace_id,
+    user_id=ctx.default_user_id,
+    prompt='List my open commitments.'
 )
 print('Agent response:\n', result['output_text'])
 "
