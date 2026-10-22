@@ -187,3 +187,25 @@ export const searchCalendarEvents = (query = "", time_min?: string, time_max?: s
       (time_min ? `&time_min=${encodeURIComponent(time_min)}` : "") +
       (time_max ? `&time_max=${encodeURIComponent(time_max)}` : "")
   );
+
+export type StrandsToolCall = {
+  name: string;
+  toolUseId?: string;
+  input?: Record<string, unknown> | string | null;
+};
+
+export type StrandsInvokeResult = {
+  prompt: string;
+  output_text: string;
+  model_provider: string;
+  model_id: string;
+  stop_reason: string;
+  tool_calls: StrandsToolCall[];
+};
+
+export const invokeStrandsAgent = (prompt: string) =>
+  request<StrandsInvokeResult>(`/api/agent/strands/invoke`, {
+    method: "POST",
+    body: JSON.stringify({ prompt }),
+  });
+

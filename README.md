@@ -985,6 +985,31 @@ print('Approval gate intact: external action was not executed.')
 "
 ```
 
+### 7. Testing Through the Web Dashboard
+
+The web dashboard (`http://localhost:3000`) includes an **Ask PROMISE AI** panel connected to `POST /api/agent/strands/invoke`.
+
+1. Start the API with Strands and Groq enabled:
+   ```bash
+   STRANDS_ENABLED=true \
+   STRANDS_MODEL_PROVIDER=groq \
+   STRANDS_MODEL_ID=openai/gpt-oss-120b \
+   GROQ_API_KEY="<YOUR_GROQ_API_KEY>" \
+   (cd services/api && uv run uvicorn promise_api.main:app --reload --port 8000)
+   ```
+2. Start the web frontend:
+   ```bash
+   cd web && npm run dev
+   ```
+3. Open `http://localhost:3000`.
+4. In the **Ask PROMISE AI** panel, click **Use Groq demo prompt**:
+   `I promised Andi I will send the revised Q3 proposal tomorrow at 10 AM. Create this commitment and prepare the action to handle it.`
+5. Click **Ask PROMISE AI**.
+6. The dashboard displays the agent's output text, model metadata (`groq · openai/gpt-oss-120b`), and executed tool calls (`create_commitment`, `handle_commitment`).
+7. The commitments list immediately refreshes with the new commitment in `waiting_for_approval`.
+8. Navigate to **Approvals** (`/approvals`) to review and decide the pending action. Actions proposed by the AI panel require explicit human approval and are never auto-executed.
+
+
 ## Known limitations / next steps
 
 - Identity & Authorization is v1 (see the section above): `AUTH_MODE=oidc` validates real

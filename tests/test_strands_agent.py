@@ -176,8 +176,10 @@ def test_strands_configuration_validation_errors():
     assert "GROQ_API_KEY is required" in str(exc.value)
 
 
-def test_strands_model_factory():
+def test_strands_model_factory(monkeypatch):
     """Model factory creates the right Model instance for each supported provider."""
+    monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
     # Google Gemini
     g_cfg = StrandsConfig(enabled=True, provider="google", model_id="gemini-2.5-flash", gemini_api_key="fake-gemini")
     g_model = StrandsModelFactory.create_model(g_cfg)

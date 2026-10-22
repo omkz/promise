@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Nav from "../components/Nav";
+import AskPromiseAI from "../components/AskPromiseAI";
 import {
   createCommitment,
   decideApproval,
@@ -106,6 +107,8 @@ export default function Home() {
       </section>
 
       {notice && <div className="notice">{notice}</div>}
+
+      <AskPromiseAI onCommitmentCreated={refresh} />
 
       <section className="grid">
         <div className="panel">
