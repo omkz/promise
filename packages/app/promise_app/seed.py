@@ -20,8 +20,10 @@ def seed(ctx: AppContext | None = None) -> AppContext:
 
     andi = Contact(id="con_andi", workspace_id=workspace_id, name="Andi", email="andi@example.com")
     sarah = Contact(id="con_sarah", workspace_id=workspace_id, name="Sarah", email="sarah@example.com")
+    alex = Contact(id="con_alex", workspace_id=workspace_id, name="Alex", email="alex@example.com")
     ctx.repos.contacts.save(andi)
     ctx.repos.contacts.save(sarah)
+    ctx.repos.contacts.save(alex)
 
     ctx.repos.documents.save(
         Document(

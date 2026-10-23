@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import Nav from "../components/Nav";
 import AskPromiseAI from "../components/AskPromiseAI";
 import {
@@ -170,6 +171,19 @@ export default function Home() {
       </header>
 
       <Nav />
+
+      {/* Alexa+ Voice Channel Callout */}
+      <div className="alexa-banner">
+        <div className="alexa-banner-content">
+          <span className="alexa-banner-pill">🎙 Voice Channel</span>
+          <span className="alexa-banner-text">
+            Prefer voice? Speak commitments aloud to the <strong>Alexa+ Simulator</strong> connected to PROMISE via Model Context Protocol (MCP).
+          </span>
+        </div>
+        <Link href="/alexa" className="alexa-banner-btn">
+          Try Alexa+ Simulator &rarr;
+        </Link>
+      </div>
 
       {/* Unified Primary Natural-Language Input */}
       <AskPromiseAI onCommitmentCreated={refresh} />
