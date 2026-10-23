@@ -3,7 +3,7 @@ from __future__ import annotations
 from promise_domain.models import Commitment
 
 from .create_calendar_event_planner import CreateCalendarEventPlanner
-from .planner import ActionPlanner, PlanningError
+from .planner import ActionPlanner, UnsupportedCommitmentError
 from .send_existing_document_planner import SendExistingDocumentPlanner
 from .send_message_planner import SendRevisedDocumentPlanner
 
@@ -22,9 +22,9 @@ _PLANNERS: list[ActionPlanner] = [
 
 
 def select_planner(commitment: Commitment) -> ActionPlanner:
-    """Raises `PlanningError` — never fabricates an action — for any commitment
+    """Raises `UnsupportedCommitmentError` — never fabricates an action — for any commitment
     none of the registered planners recognize."""
     for planner in _PLANNERS:
         if planner.supports(commitment):
             return planner
-    raise PlanningError("PROMISE does not yet know how to execute this commitment.")
+    raise UnsupportedCommitmentError("PROMISE does not yet know how to execute this commitment.")

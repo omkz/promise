@@ -5,6 +5,23 @@ class PromiseError(Exception):
     """Base class for domain/application errors the API and MCP layers translate."""
 
 
+class PlanningError(PromiseError):
+    """Raised when a commitment cannot be planned: no supported planner for its
+    type (see `select_planner`), or a supported planner can't proceed (e.g. no
+    relevant document found). Never a reason to fabricate an action."""
+
+
+class UnsupportedCommitmentError(PlanningError):
+    """Raised when no automated planner supports executing a commitment.
+
+    The commitment remains open and requires manual follow-through. It is not
+    failed, and no action or approval is fabricated.
+    """
+
+    def __init__(self, message: str = "PROMISE does not yet know how to execute this commitment.") -> None:
+        super().__init__(message)
+
+
 class NotFoundError(PromiseError):
     def __init__(self, entity: str, entity_id: str) -> None:
         super().__init__(f"{entity} '{entity_id}' not found")

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .message_composer import ComposedMessage, DeterministicMessageComposer, MessageComposer
-from .planner import ActionPlanner, PlanningError
+from .planner import ActionPlanner, PlanningError, UnsupportedCommitmentError
 from .schema import ActionPlan
 from .selection import select_planner
 from .send_existing_document_planner import SendExistingDocumentPlanner
@@ -17,5 +17,6 @@ __all__ = [
     "SendExistingDocumentPlanner",
     "SendMessagePlanner",
     "SendRevisedDocumentPlanner",
+    "UnsupportedCommitmentError",
     "select_planner",
 ]

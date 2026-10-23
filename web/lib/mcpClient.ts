@@ -68,6 +68,8 @@ export type McpHandleResult = {
     id: string;
     status: string;
   };
+  requires_manual_follow_through?: boolean;
+  message?: string;
   error?: string;
 };
 

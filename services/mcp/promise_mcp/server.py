@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Annotated, Any
@@ -7,6 +8,8 @@ from typing import Annotated, Any
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult, TextContent
@@ -274,10 +277,14 @@ def handle_commitment(commitment_id: str, mcp_ctx: Context | None = None) -> dic
     """Run the agent on a commitment: retrieve context, plan an action, and request approval."""
     principal = _authenticate(mcp_ctx)
     require(principal, Permission.AGENT_EXECUTE)
-    return _dump(tools.handle_commitment(
-        ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, commitment_id=commitment_id,
-        trigger="mcp.handle_commitment",
-    ))
+    try:
+        return _dump(tools.handle_commitment(
+            ctx, workspace_id=principal.workspace_id, user_id=principal.user_id, commitment_id=commitment_id,
+            trigger="mcp.handle_commitment",
+        ))
+    except Exception as exc:
+        logger.exception("MCP handle_commitment failed for commitment %s: %s", commitment_id, exc)
+        return {"error": str(exc)}
 
 
 @mcp.tool()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 
 from promise_domain.enums import AgentRunStatus, AgentStepName, AgentStepStatus, CommitmentStatus
@@ -8,12 +9,14 @@ from promise_shared.clock import iso_now
 from promise_shared.ids import new_id
 
 from . import audit
-from .action_planning import select_planner
+from .action_planning import UnsupportedCommitmentError, select_planner
 from .context import AgentRepos
 from .steps import approval as approval_step
 from .steps import completion as completion_step
 from .steps import execution as execution_step
 from .steps import retrieval as retrieval_step
+
+logger = logging.getLogger(__name__)
 
 
 class AgentOrchestrator:
@@ -48,6 +51,7 @@ class AgentOrchestrator:
 
     def run_handle_commitment(self, workspace_id: str, user_id: str, commitment_id: str, *, trigger: str) -> dict:
         commitment = self.repos.commitments.require(workspace_id, commitment_id)
+        initial_status = commitment.status
         contact = self.repos.contacts.get(workspace_id, commitment.contact_id) if commitment.contact_id else None
 
         agent_run = AgentRun(id=new_id("run"), workspace_id=workspace_id, user_id=user_id, commitment_id=commitment_id, trigger=trigger)
@@ -65,10 +69,41 @@ class AgentOrchestrator:
                 step.output_summary = f"{len(context['items'])} context item(s) ({context['status'].value})"
 
             with self._step(agent_run, AgentStepName.PLANNING, ["action_planner.select", "action_planner.plan"]) as step:
-                planner = select_planner(commitment)
-                plan = planner.plan(commitment, contact, context["items"], repos=self.repos, agent_run_id=agent_run.id)
-                step.output_summary = f"Proposed action {plan['action'].id} ({plan['action'].type.value}) via {planner.name}"
+                try:
+                    planner = select_planner(commitment)
+                    plan = planner.plan(commitment, contact, context["items"], repos=self.repos, agent_run_id=agent_run.id)
+                    step.output_summary = f"Proposed action {plan['action'].id} ({plan['action'].type.value}) via {planner.name}"
+                except UnsupportedCommitmentError as exc:
+                    step.output_summary = "No automated planner supports this commitment; requires manual follow-through"
+                    self.repos.commitments.update(
+                        workspace_id, commitment_id, lambda c: setattr(c, "status", initial_status or CommitmentStatus.OPEN)
+                    )
+                    agent_run.status = AgentRunStatus.COMPLETED
+                    agent_run.ended_at = iso_now()
+                    self.repos.agent_runs.save(agent_run)
+                    audit.record(
+                        self.repos, workspace_id, actor="agent", event_type="agent_run.manual_follow_through_required",
+                        entity_type="commitment", entity_id=commitment_id, agent_run_id=agent_run.id,
+                        summary=str(exc),
+                    )
+                    return {
+                        "agent_run": agent_run,
+                        "commitment": self.repos.commitments.require(workspace_id, commitment_id),
+                        "contact": contact,
+                        "action_plan": None,
+                        "document": None,
+                        "changes": [],
+                        "draft": None,
+                        "action": None,
+                        "approval": None,
+                        "requires_manual_follow_through": True,
+                        "message": (
+                            "This commitment requires manual follow-through. PROMISE does not have an "
+                            "automated action for this task, so it has been preserved as open on your dashboard."
+                        ),
+                    }
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Agent run %s failed during handle_commitment for commitment %s: %s", agent_run.id, commitment_id, exc)
             agent_run.status = AgentRunStatus.FAILED
             agent_run.error = str(exc)
             agent_run.ended_at = iso_now()

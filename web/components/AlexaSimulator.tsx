@@ -267,6 +267,11 @@ export default function AlexaSimulator() {
       if (res.action?.status === "waiting_for_approval") {
         const spoken = "I've planned the follow-through action. It is now waiting for your approval.";
         speakAlexaResponse(spoken);
+      } else if (res.requires_manual_follow_through) {
+        const spoken =
+          res.message ||
+          "This commitment requires manual follow-through. PROMISE does not have an automated action for this task, so it has been preserved as open on your dashboard.";
+        speakAlexaResponse(spoken);
       } else if (res.error) {
         speakAlexaResponse(`Notice: ${res.error}`);
       }
@@ -614,6 +619,31 @@ export default function AlexaSimulator() {
                           {entry.handleResult.error ? (
                             <div className="card-notice card-notice--conflict">
                               <strong>Follow-Through Notice:</strong> {entry.handleResult.error}
+                            </div>
+                          ) : entry.handleResult.requires_manual_follow_through ? (
+                            <div data-testid="manual-follow-through-notice">
+                              <div className="handle-result-header">
+                                <span
+                                  className="handle-result-badge"
+                                  style={{ background: "rgba(59, 130, 246, 0.15)", color: "#60a5fa" }}
+                                >
+                                  Manual Follow-Through
+                                </span>
+                                <span className="handle-result-status">Status: Open</span>
+                              </div>
+                              <p className="handle-result-description">
+                                {entry.handleResult.message ||
+                                  "This commitment requires manual follow-through. PROMISE does not have an automated action for this task, so it has been preserved as open on your dashboard."}
+                              </p>
+                              <div
+                                className="approval-safeguard-banner"
+                                style={{ background: "rgba(59, 130, 246, 0.08)", borderColor: "rgba(59, 130, 246, 0.2)" }}
+                              >
+                                <span>📋 Preserved as Open task</span>
+                                <Link href="/" className="safeguard-link">
+                                  View on Dashboard →
+                                </Link>
+                              </div>
                             </div>
                           ) : (
                             <div>

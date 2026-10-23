@@ -84,16 +84,60 @@ def test_select_planner_raises_planning_error_for_an_unsupported_commitment_type
         select_planner(commitment)
 
 
-def test_unsupported_commitment_fails_the_agent_run_safely_not_silently(ctx):
+def test_unsupported_commitment_returns_manual_follow_through_safely(ctx):
     commitment = _create(ctx, "I need to call Sarah on Friday.")["commitment"]
+    assert commitment.status == CommitmentStatus.OPEN
 
-    with pytest.raises(PlanningError):
-        tools.handle_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
+    handled = tools.handle_commitment(
+        ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id
+    )
 
-    failed = tools.get_commitment(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id)
-    assert failed.status.value == "failed"
-    # no Action was ever fabricated for this commitment
-    assert tools.list_actions(ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id) == []
+    assert handled["requires_manual_follow_through"] is True
+    assert "manual follow-through" in handled["message"].lower()
+    assert handled["action"] is None
+    assert handled["approval"] is None
+
+    # Commitment is preserved as OPEN — never marked failed
+    preserved = tools.get_commitment(
+        ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id
+    )
+    assert preserved.status == CommitmentStatus.OPEN
+
+    # No Action or Approval was ever fabricated
+    assert tools.list_actions(
+        ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id
+    ) == []
+    assert ctx.repos.approvals.list(ctx.default_workspace_id) == []
+
+    # AgentRun ended cleanly with audit record
+    run = tools.get_agent_run(
+        ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, agent_run_id=handled["agent_run"].id
+    )
+    assert run["run"].status.value == "completed"
+
+    events = tools.list_audit_events(ctx, workspace_id=ctx.default_workspace_id)
+    assert any(e.event_type == "agent_run.manual_follow_through_required" for e in events)
+
+
+def test_unsupported_project_report_commitment_returns_manual_follow_through(ctx):
+    commitment = _create(ctx, "I'll finish the project report by Friday afternoon.")["commitment"]
+    assert commitment.status == CommitmentStatus.OPEN
+
+    handled = tools.handle_commitment(
+        ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id
+    )
+
+    assert handled["requires_manual_follow_through"] is True
+    assert handled["action"] is None
+    assert handled["approval"] is None
+
+    refreshed = tools.get_commitment(
+        ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id
+    )
+    assert refreshed.status == CommitmentStatus.OPEN
+    assert tools.list_actions(
+        ctx, workspace_id=ctx.default_workspace_id, user_id=ctx.default_user_id, commitment_id=commitment.id
+    ) == []
 
 
 # ---- 3 / 5 / 7. supported revision workflow, ContextItem[] consumption, proposed Action ----------

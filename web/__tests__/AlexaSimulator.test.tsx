@@ -232,6 +232,52 @@ describe("AlexaSimulator Component", () => {
     });
   });
 
+  it("handles unsupported commitment gracefully with manual follow-through explanation", async () => {
+    mockCreateCommitment.mockResolvedValueOnce({
+      detected: true,
+      persisted: true,
+      commitment: {
+        id: "com_unsupported_123",
+        title: "Finish project report by Friday afternoon",
+        action: "Finish project report by",
+        due_at: "2026-10-23T17:00:00+07:00",
+        priority: "medium",
+        status: "open",
+        confidence: 0.95,
+      },
+    });
+
+    mockHandleCommitment.mockResolvedValueOnce({
+      requires_manual_follow_through: true,
+      message:
+        "This commitment requires manual follow-through. PROMISE does not have an automated action for this task, so it has been preserved as open on your dashboard.",
+    });
+
+    render(<AlexaSimulator />);
+
+    const input = screen.getByLabelText("Alexa speech input text fallback");
+    fireEvent.change(input, { target: { value: "I'll finish the project report by Friday afternoon." } });
+
+    const sendBtn = screen.getByRole("button", { name: "Send to Alexa+" });
+    fireEvent.click(sendBtn);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Handle this with PROMISE" })).toBeInTheDocument();
+    });
+
+    const handleBtn = screen.getByRole("button", { name: "Handle this with PROMISE" });
+    fireEvent.click(handleBtn);
+
+    await waitFor(() => {
+      expect(mockHandleCommitment).toHaveBeenCalledWith("com_unsupported_123");
+      expect(screen.getByTestId("handle-result")).toBeInTheDocument();
+      expect(screen.getByTestId("manual-follow-through-notice")).toBeInTheDocument();
+      expect(screen.getByText("Manual Follow-Through")).toBeInTheDocument();
+      expect(screen.getByText(/This commitment requires manual follow-through/)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /View on Dashboard/i })).toBeInTheDocument();
+    });
+  });
+
   it("displays connection error banner when MCP connection fails", async () => {
     mockConnect.mockImplementation(async () => {
       stateCallback?.({

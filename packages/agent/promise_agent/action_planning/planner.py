@@ -3,21 +3,17 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from promise_domain.models import Commitment, Contact
-from promise_shared.errors import PromiseError
+from promise_shared.errors import PlanningError, PromiseError, UnsupportedCommitmentError
 
 from ..context import AgentRepos
 from ..context_retrieval import ContextItem
+
+__all__ = ["ActionPlanner", "PlanningError", "PromiseError", "UnsupportedCommitmentError"]
 
 """The `ActionPlanner` abstraction — generic action planning, separate from any
 one specific workflow (the "send revised document" case lives entirely in
 `SendMessagePlanner`, one implementation among possibly several later).
 """
-
-
-class PlanningError(PromiseError):
-    """Raised when a commitment can't be planned: no supported planner for its
-    type (see `select_planner`), or a supported planner can't proceed (e.g. no
-    relevant document found). Never a reason to fabricate an action."""
 
 
 class ActionPlanner(Protocol):
