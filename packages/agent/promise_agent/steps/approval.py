@@ -68,8 +68,17 @@ def decide_approval(
         ),
         expected_status=ApprovalStatus.PENDING,
     )
-    new_action_status = ActionStatus.APPROVED if decision == ApprovalStatus.APPROVED else ActionStatus.REJECTED
+
     try:
+        action = repos.actions.require(workspace_id, approval.action_id)
+        if decision == ApprovalStatus.REJECTED and action.status == ActionStatus.REJECTED:
+            # Safe recovery of inconsistent state: approval was PENDING while action was
+            # already REJECTED. Finalize approval as REJECTED (already updated above with
+            # decision metadata via atomic CAS) without attempting an invalid
+            # WAITING_FOR_APPROVAL -> REJECTED transition on the action.
+            return approval
+
+        new_action_status = ActionStatus.APPROVED if decision == ApprovalStatus.APPROVED else ActionStatus.REJECTED
         repos.actions.update(
             workspace_id, approval.action_id, lambda a: setattr(a, "status", new_action_status),
             expected_status=ActionStatus.WAITING_FOR_APPROVAL,

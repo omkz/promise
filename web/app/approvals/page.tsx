@@ -24,7 +24,13 @@ type PageNotice = {
 function isConflictError(e: unknown): boolean {
   if (e instanceof Error) {
     const msg = e.message.toLowerCase();
-    return msg.includes("409") || msg.includes("conflict") || msg.includes("already");
+    return (
+      msg.includes("409") ||
+      msg.includes("conflict") ||
+      msg.includes("already") ||
+      msg.includes("expected state") ||
+      msg.includes("not in the expected state")
+    );
   }
   return false;
 }

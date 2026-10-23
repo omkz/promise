@@ -120,3 +120,90 @@ def test_retry_after_a_rolled_back_decision_succeeds_normally(seeded_ctx, monkey
     action = ctx.repos.actions.require(ctx.default_workspace_id, handled["action"].id)
     assert approval.status == ApprovalStatus.APPROVED
     assert action.status == ActionStatus.APPROVED
+
+
+# ---- safe recovery of stale/inconsistent approval state -------------------------------------
+
+def test_inconsistent_pending_approval_with_already_rejected_action_recovers_on_rejection(seeded_ctx):
+    """When an approval is still PENDING but its linked action was already REJECTED
+    (e.g. from an earlier approval on the same action being rejected), deciding
+    REJECTED safely finalizes the approval as REJECTED with full decision metadata
+    instead of failing with a state conflict on the action."""
+    ctx = seeded_ctx
+    handled = _handled(ctx)
+    approval_id = handled["approval"].id
+    action_id = handled["action"].id
+
+    # Simulate inconsistent state: action already marked REJECTED out-of-band
+    ctx.repos.actions.update(
+        ctx.default_workspace_id, action_id, lambda a: setattr(a, "status", ActionStatus.REJECTED)
+    )
+
+    # Initial assertion: approval is PENDING while action is already REJECTED
+    app_before = ctx.repos.approvals.require(ctx.default_workspace_id, approval_id)
+    act_before = ctx.repos.actions.require(ctx.default_workspace_id, action_id)
+    assert app_before.status == ApprovalStatus.PENDING
+    assert act_before.status == ActionStatus.REJECTED
+
+    # Rejection decision succeeds and finalizes the approval
+    decided = _decide(ctx, approval_id, "rejected")
+    assert decided.status == ApprovalStatus.REJECTED
+    assert decided.decided_by == ctx.default_user_id
+    assert decided.decided_at is not None
+
+    # Action remains safely REJECTED (no external action executed)
+    act_after = ctx.repos.actions.require(ctx.default_workspace_id, action_id)
+    assert act_after.status == ActionStatus.REJECTED
+    assert act_after.executed_at is None
+
+
+def test_inconsistent_pending_approval_with_already_rejected_action_refuses_approval(seeded_ctx):
+    """An approval whose linked action is already REJECTED cannot be approved; it must
+    raise ConflictError and compensate the approval back to PENDING."""
+    ctx = seeded_ctx
+    handled = _handled(ctx)
+    approval_id = handled["approval"].id
+    action_id = handled["action"].id
+
+    ctx.repos.actions.update(
+        ctx.default_workspace_id, action_id, lambda a: setattr(a, "status", ActionStatus.REJECTED)
+    )
+
+    with pytest.raises(ConflictError):
+        _decide(ctx, approval_id, "approved")
+
+    # Approval was rolled back to PENDING, never left APPROVED
+    app_after = ctx.repos.approvals.require(ctx.default_workspace_id, approval_id)
+    assert app_after.status == ApprovalStatus.PENDING
+    assert app_after.decided_by is None
+    assert app_after.decided_at is None
+
+    # Action remains REJECTED
+    act_after = ctx.repos.actions.require(ctx.default_workspace_id, action_id)
+    assert act_after.status == ActionStatus.REJECTED
+    assert act_after.executed_at is None
+
+
+def test_recovered_approval_rejects_repeated_decisions(seeded_ctx):
+    """Once safely recovered to REJECTED, subsequent decisions on the now-terminal
+    approval must raise ConflictError, preserving atomic CAS idempotency semantics."""
+    ctx = seeded_ctx
+    handled = _handled(ctx)
+    approval_id = handled["approval"].id
+    action_id = handled["action"].id
+
+    ctx.repos.actions.update(
+        ctx.default_workspace_id, action_id, lambda a: setattr(a, "status", ActionStatus.REJECTED)
+    )
+
+    # First rejection succeeds via recovery
+    recovered = _decide(ctx, approval_id, "rejected")
+    assert recovered.status == ApprovalStatus.REJECTED
+
+    # Repeated rejection on already-terminal approval fails with ConflictError
+    with pytest.raises(ConflictError):
+        _decide(ctx, approval_id, "rejected")
+
+    # Conflicting approval on already-terminal approval fails with ConflictError
+    with pytest.raises(ConflictError):
+        _decide(ctx, approval_id, "approved")
