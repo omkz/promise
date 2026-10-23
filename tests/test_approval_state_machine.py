@@ -127,3 +127,26 @@ def test_concurrent_approve_and_reject_only_one_wins(seeded_ctx, monkeypatch):
     action = seeded_ctx.repos.actions.require(seeded_ctx.default_workspace_id, handled["action"].id)
     expected_action_status = ActionStatus.APPROVED if final.status == ApprovalStatus.APPROVED else ActionStatus.REJECTED
     assert action.status == expected_action_status
+
+
+def test_list_pending_approvals_sorts_newest_first(seeded_ctx):
+    ws, uid = seeded_ctx.default_workspace_id, seeded_ctx.default_user_id
+
+    # Create two commitments and handle them at different times
+    c1 = tools.create_commitment(seeded_ctx, workspace_id=ws, user_id=uid, text="I will email Andi the proposal.")["commitment"]
+    h1 = tools.handle_commitment(seeded_ctx, workspace_id=ws, user_id=uid, commitment_id=c1.id)
+
+    # Set requested_at of h1 in the past
+    seeded_ctx.repos.approvals.update(ws, h1["approval"].id, lambda a: setattr(a, "requested_at", "2026-10-20T01:00:00+00:00"))
+
+    c2 = tools.create_commitment(seeded_ctx, workspace_id=ws, user_id=uid, text="I will send Andi the revised proposal.")["commitment"]
+    h2 = tools.handle_commitment(seeded_ctx, workspace_id=ws, user_id=uid, commitment_id=c2.id)
+
+    # Set requested_at of h2 in the future/newer
+    seeded_ctx.repos.approvals.update(ws, h2["approval"].id, lambda a: setattr(a, "requested_at", "2026-10-23T10:00:00+00:00"))
+
+    pending = tools.list_pending_approvals(seeded_ctx, workspace_id=ws, user_id=uid)
+    pending_ids = [a.id for a in pending]
+
+    # h2 is newer than h1, so h2 must appear before h1
+    assert pending_ids.index(h2["approval"].id) < pending_ids.index(h1["approval"].id)

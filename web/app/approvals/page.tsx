@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Nav from "../../components/Nav";
 import ApprovalCard, { type DecisionState } from "../../components/ApprovalCard";
+import { sortApprovalsNewestFirst } from "../../lib/format";
 import {
   decideApproval,
   executeAction,
@@ -54,7 +55,8 @@ export default function ApprovalsPage() {
       listActions(),
       getCommitments(),
     ]);
-    setApprovals(pending);
+    const sorted = sortApprovalsNewestFirst(pending);
+    setApprovals(sorted);
     setActions(Object.fromEntries(allActions.map((a) => [a.id, a])));
     setCommitments(Object.fromEntries(allCommitments.map((c) => [c.id, c])));
     // Reset per-card state for cards that are no longer pending.
@@ -73,7 +75,7 @@ export default function ApprovalsPage() {
     Promise.all([listPendingApprovals(), listActions(), getCommitments()])
       .then(([pending, allActions, allCommitments]) => {
         if (cancelled) return;
-        setApprovals(pending);
+        setApprovals(sortApprovalsNewestFirst(pending));
         setActions(Object.fromEntries(allActions.map((a) => [a.id, a])));
         setCommitments(Object.fromEntries(allCommitments.map((c) => [c.id, c])));
       })

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getActionTimestamp, sortActionsNewestFirst } from "../lib/format";
+import { getActionTimestamp, sortActionsNewestFirst, sortApprovalsNewestFirst } from "../lib/format";
 
 describe("getActionTimestamp", () => {
   it("prefers executed_at over updated_at and created_at", () => {
@@ -79,5 +79,39 @@ describe("sortActionsNewestFirst", () => {
     const copy = [...actions];
     sortActionsNewestFirst(actions);
     expect(actions).toEqual(copy);
+  });
+});
+
+describe("sortApprovalsNewestFirst", () => {
+  it("sorts approvals with newest requested_at first", () => {
+    const approvals = [
+      { id: "apr_old", requested_at: "2026-10-22T10:00:00Z" },
+      { id: "apr_newest", requested_at: "2026-10-23T14:00:00Z" },
+      { id: "apr_mid", requested_at: "2026-10-23T08:00:00Z" },
+    ];
+
+    const sorted = sortApprovalsNewestFirst(approvals);
+    expect(sorted.map((a) => a.id)).toEqual(["apr_newest", "apr_mid", "apr_old"]);
+  });
+
+  it("provides deterministic sorting by id when requested_at are identical", () => {
+    const approvals = [
+      { id: "apr_alpha", requested_at: "2026-10-23T10:00:00Z" },
+      { id: "apr_zebra", requested_at: "2026-10-23T10:00:00Z" },
+      { id: "apr_beta", requested_at: "2026-10-23T10:00:00Z" },
+    ];
+
+    const sorted = sortApprovalsNewestFirst(approvals);
+    expect(sorted.map((a) => a.id)).toEqual(["apr_zebra", "apr_beta", "apr_alpha"]);
+  });
+
+  it("does not mutate the original array", () => {
+    const approvals = [
+      { id: "apr_1", requested_at: "2026-10-22T10:00:00Z" },
+      { id: "apr_2", requested_at: "2026-10-23T10:00:00Z" },
+    ];
+    const copy = [...approvals];
+    sortApprovalsNewestFirst(approvals);
+    expect(approvals).toEqual(copy);
   });
 });

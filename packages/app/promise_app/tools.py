@@ -348,12 +348,14 @@ def list_pending_approvals(ctx: AppContext, *, workspace_id: str, user_id: str) 
     """`Approval` has no owner field of its own (see `_require_owned_action`) —
     scoped transitively through the action's commitment, same as the
     single-resource `decide_approval` check, so listing and acting agree on
-    who can see what."""
+    who can see what. Sorted newest first so newly requested approvals appear
+    immediately at the top."""
     owned_action_ids = _owned_action_ids(ctx, workspace_id=workspace_id, user_id=user_id)
-    return [
+    pending = [
         a for a in ctx.repos.approvals.list(workspace_id)
         if a.status == ApprovalStatus.PENDING and a.action_id in owned_action_ids
     ]
+    return sorted(pending, key=lambda a: (a.requested_at, a.id), reverse=True)
 
 
 def list_actions(ctx: AppContext, *, workspace_id: str, user_id: str, commitment_id: str | None = None) -> list[Action]:

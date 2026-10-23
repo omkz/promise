@@ -56,3 +56,17 @@ export function sortActionsNewestFirst<T extends {
     return b.id.localeCompare(a.id);
   });
 }
+
+export function sortApprovalsNewestFirst<T extends {
+  id: string;
+  requested_at: string;
+}>(approvals: T[]): T[] {
+  return [...approvals].sort((a, b) => {
+    const timeA = new Date(a.requested_at).getTime();
+    const timeB = new Date(b.requested_at).getTime();
+    if (timeA !== timeB) {
+      return timeB - timeA;
+    }
+    return b.id.localeCompare(a.id);
+  });
+}
