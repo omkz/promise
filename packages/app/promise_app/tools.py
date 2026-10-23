@@ -363,16 +363,17 @@ def list_actions(ctx: AppContext, *, workspace_id: str, user_id: str, commitment
     lookup — an unowned commitment_id is rejected outright (`WorkspaceAccessError`,
     same as `get_commitment`), never silently returned as an empty list. With no
     `commitment_id`, this is a list operation: it's narrowed to the caller's own
-    commitments' actions, not rejected."""
+    commitments' actions, not rejected. Sorted newest first."""
     if commitment_id:
         _require_owned_commitment(ctx, workspace_id=workspace_id, commitment_id=commitment_id, user_id=user_id)
-        return [a for a in ctx.repos.actions.list(workspace_id) if a.commitment_id == commitment_id]
-
-    owned_commitment_ids = _owned_commitment_ids(ctx, workspace_id=workspace_id, user_id=user_id)
-    return [
-        a for a in ctx.repos.actions.list(workspace_id)
-        if a.commitment_id is None or a.commitment_id in owned_commitment_ids
-    ]
+        actions = [a for a in ctx.repos.actions.list(workspace_id) if a.commitment_id == commitment_id]
+    else:
+        owned_commitment_ids = _owned_commitment_ids(ctx, workspace_id=workspace_id, user_id=user_id)
+        actions = [
+            a for a in ctx.repos.actions.list(workspace_id)
+            if a.commitment_id is None or a.commitment_id in owned_commitment_ids
+        ]
+    return sorted(actions, key=lambda a: (a.executed_at or a.updated_at or a.created_at or "", a.id), reverse=True)
 
 
 def get_action(ctx: AppContext, *, workspace_id: str, user_id: str, action_id: str) -> Action:
