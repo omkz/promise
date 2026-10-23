@@ -61,16 +61,40 @@ def _needs_confirmation(extraction: CommitmentExtraction) -> dict[str, Any]:
 
 
 def _resolve_contact(workspace_id: str, contact_name: str | None, repos: AgentRepos) -> Contact | None:
-    if not contact_name:
+    if not contact_name or not contact_name.strip():
         return None
-    existing = next((c for c in repos.contacts.list(workspace_id) if c.name.lower() == contact_name.lower()), None)
-    if existing:
-        return existing
-    # A contact created from a bare detected name has no verified email — PROMISE never
-    # invents one (e.g. "andi@example.com" from the name "Andi"). Anything that needs to
-    # actually send to this contact must check `contact.email` first; see
-    # `promise_agent.steps.planning` and `promise_app.tools.create_draft`.
-    return repos.contacts.save(Contact(id=new_id("con"), workspace_id=workspace_id, name=contact_name, email=None))
+    normalized_name = contact_name.strip().lower()
+    matches = [
+        c
+        for c in repos.contacts.list(workspace_id)
+        if c.name and c.name.strip().lower() == normalized_name
+    ]
+    if not matches:
+        # A contact created from a bare detected name has no verified email — PROMISE never
+        # invents one (e.g. "andi@example.com" from the name "Andi"). Anything that needs to
+        # actually send to this contact must check `contact.email` first; see
+        # `promise_agent.steps.planning` and `promise_app.tools.create_draft`.
+        return repos.contacts.save(Contact(id=new_id("con"), workspace_id=workspace_id, name=contact_name.strip(), email=None))
+
+    with_email = [c for c in matches if c.email and c.email.strip()]
+    without_email = [c for c in matches if not (c.email and c.email.strip())]
+
+    distinct_emails = {c.email.strip().lower() for c in with_email}
+    if len(distinct_emails) == 1:
+        # Unambiguous match: reuse the existing contact with the verified email.
+        # Break ties deterministically by created_at and id if multiple records share this email.
+        return sorted(with_email, key=lambda c: (getattr(c, "created_at", "") or "", c.id))[0]
+
+    if len(distinct_emails) > 1:
+        # Ambiguous recipients: multiple contacts with different emails share this name.
+        # Never arbitrarily select one of them or guess. Downstream action planning will
+        # safely fail closed with VerifiedContactRequiredError.
+        if without_email:
+            return sorted(without_email, key=lambda c: (getattr(c, "created_at", "") or "", c.id))[0]
+        return repos.contacts.save(Contact(id=new_id("con"), workspace_id=workspace_id, name=contact_name.strip(), email=None))
+
+    # No contacts with email exist; reuse the oldest bare contact deterministically.
+    return sorted(without_email, key=lambda c: (getattr(c, "created_at", "") or "", c.id))[0]
 
 
 def _validate_occurred_at(occurred_at: str | None) -> str | None:

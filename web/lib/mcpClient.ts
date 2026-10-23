@@ -74,6 +74,7 @@ export type McpHandleResult = {
 export class PromiseMcpService {
   private client: Client | null = null;
   private transport: StreamableHTTPClientTransport | null = null;
+  private isDisposed = false;
   private logs: McpToolCallLog[] = [];
   private onLogsChanged?: (logs: McpToolCallLog[]) => void;
   private onStateChanged?: (state: McpConnectionState) => void;
@@ -122,6 +123,7 @@ export class PromiseMcpService {
       return this.state;
     }
 
+    this.isDisposed = false;
     this.updateState({ status: "connecting", error: undefined, url: this.mcpUrl });
 
     try {
@@ -141,12 +143,20 @@ export class PromiseMcpService {
 
       await this.client.connect(this.transport);
 
+      if (this.isDisposed) {
+        return this.state;
+      }
+
       const serverVersion = this.client.getServerVersion()?.version || "unknown";
       const protocolVersion = this.client.getNegotiatedProtocolVersion() || "2025-06-18";
 
       // Discover tools
       const toolList = await this.client.listTools();
       const tools = toolList.tools.map((t) => t.name);
+
+      if (this.isDisposed) {
+        return this.state;
+      }
 
       this.updateState({
         status: "connected",
@@ -165,6 +175,9 @@ export class PromiseMcpService {
 
       return this.state;
     } catch (err: unknown) {
+      if (this.isDisposed) {
+        return this.state;
+      }
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.updateState({
         status: "error",
@@ -175,6 +188,7 @@ export class PromiseMcpService {
   }
 
   public async disconnect(): Promise<void> {
+    this.isDisposed = true;
     try {
       if (this.client) {
         await this.client.close();

@@ -92,18 +92,26 @@ export default function AlexaSimulator() {
 
   // Initialize MCP Service
   useEffect(() => {
+    let isCancelled = false;
     const service = new PromiseMcpService(mcpUrl, {
-      onLogsChanged: (newLogs) => setLogs(newLogs),
-      onStateChanged: (newState) => setConnection(newState),
+      onLogsChanged: (newLogs) => {
+        if (!isCancelled) setLogs(newLogs);
+      },
+      onStateChanged: (newState) => {
+        if (!isCancelled) setConnection(newState);
+      },
     });
     mcpServiceRef.current = service;
 
     // Connect to MCP automatically on mount
     service.connect().catch((err) => {
-      console.warn("Auto-connecting to MCP server failed:", err);
+      if (!isCancelled) {
+        console.warn("Auto-connecting to MCP server failed:", err);
+      }
     });
 
     return () => {
+      isCancelled = true;
       service.disconnect();
     };
   }, [mcpUrl]);
